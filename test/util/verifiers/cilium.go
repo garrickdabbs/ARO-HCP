@@ -14,9 +14,16 @@
 
 package verifiers
 
+// NOTE: This file depends on the staticFiles embed.FS variable defined in
+// serving_app.go, which embeds the artifacts directory containing the
+// cilium-connectivity-check YAML files.
+
 import (
 	"context"
 	"fmt"
+	"io/fs"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
@@ -24,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -119,4 +127,147 @@ func (v verifyCiliumOperational) Verify(ctx context.Context, adminRESTConfig *re
 // Verifies that all Cilium pods are running in given namespace.
 func VerifyCiliumOperational(ciliumNamespace string, ciliumLabelSelector string) HostedClusterVerifier {
 	return verifyCiliumOperational{ciliumNamespace: ciliumNamespace, ciliumLabelSelector: ciliumLabelSelector}
+}
+
+type verifyCiliumConnectivityChecks struct {
+	ciliumVersion string
+}
+
+func (v verifyCiliumConnectivityChecks) Name() string {
+	return "VerifyCiliumConnectivityChecks"
+}
+
+func (v verifyCiliumConnectivityChecks) Verify(ctx context.Context, adminRESTConfig *rest.Config) error {
+	logger := ginkgo.GinkgoLogr
+
+	kubeClient, err := kubernetes.NewForConfig(adminRESTConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create kubernetes client: %w", err)
+	}
+
+	dynamicClient, err := dynamic.NewForConfig(adminRESTConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
+	// Create namespace for the check
+	namespaceName := "cilium-test"
+	namespace, err := kubeClient.CoreV1().Namespaces().Create(
+		ctx,
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespaceName,
+			},
+		},
+		metav1.CreateOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to create test namespace: %w", err)
+	}
+
+	// Ensure namespace cleanup on exit
+	defer func() {
+		deleteCtx := context.Background()
+		err := kubeClient.CoreV1().Namespaces().Delete(deleteCtx, namespaceName, metav1.DeleteOptions{})
+		if err != nil {
+			logger.Error(err, "failed to delete test namespace", "namespace", namespaceName)
+		}
+	}()
+
+	// Deploy all YAML files from the connectivity check directory
+	checkDir := fmt.Sprintf("artifacts/cilium-connectivity-check-%s", v.ciliumVersion)
+	entries, err := fs.ReadDir(staticFiles, checkDir)
+	if err != nil {
+		return fmt.Errorf("failed to read connectivity check artifacts directory: %w", err)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
+		}
+
+		filePath := filepath.Join(checkDir, entry.Name())
+		deploymentYAML, err := staticFiles.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", filePath, err)
+		}
+
+		resource, err := createArbitraryResource(ctx, dynamicClient, namespace.Name, deploymentYAML)
+		if err != nil {
+			return fmt.Errorf("failed to create test resource from %s: %w", filePath, err)
+		}
+
+		logger.Info("created resource",
+			"file", entry.Name(),
+			"kind", resource.GetKind(),
+			"name", resource.GetName(),
+			"namespace", resource.GetNamespace(),
+		)
+
+	}
+
+	// Wait for all test pods to be running and ready. An unhealthy/unready pod
+	// indicates a failed check.
+	var lastErr error
+	err = wait.PollUntilContextTimeout(ctx, 30*time.Second, 10*time.Minute, true, func(ctx context.Context) (done bool, err error) {
+		pods, err := kubeClient.CoreV1().Pods(namespaceName).List(ctx, metav1.ListOptions{})
+		if err != nil {
+			lastErr = fmt.Errorf("failed to list pods in %s namespace: %w", namespaceName, err)
+			logger.Info("failed to list pods", "error", err)
+			return false, nil
+		}
+
+		if len(pods.Items) == 0 {
+			lastErr = fmt.Errorf("no test pods found in %s namespace", namespaceName)
+			logger.Info("no test pods found yet in namespace", "namespace", namespaceName)
+			return false, nil
+		}
+
+		notReadyPods := []string{}
+		for _, pod := range pods.Items {
+			// Check if pod is running
+			if pod.Status.Phase != corev1.PodRunning {
+				notReadyPods = append(notReadyPods, fmt.Sprintf("%s (phase: %s)", pod.Name, pod.Status.Phase))
+				continue
+			}
+
+			// Check if pod is ready - this is critical for connectivity checks
+			// as liveness/readiness probes are what indicate test success/failure
+			podReady := false
+			for _, condition := range pod.Status.Conditions {
+				if condition.Type == corev1.PodReady {
+					if condition.Status == corev1.ConditionTrue {
+						podReady = true
+					}
+					break
+				}
+			}
+
+			if !podReady {
+				notReadyPods = append(notReadyPods, fmt.Sprintf("%s (running but not ready)", pod.Name))
+			}
+		}
+
+		if len(notReadyPods) > 0 {
+			lastErr = fmt.Errorf("test pods not yet ready: %v", notReadyPods)
+			logger.Info("waiting for test pods to be ready", "notReady", notReadyPods)
+			return false, nil
+		}
+
+		return true, nil
+	})
+	if err != nil {
+		if lastErr != nil {
+			return fmt.Errorf("not all pods in %s namespace are ready: %w", namespaceName, lastErr)
+		}
+		return fmt.Errorf("connectivity check failed, timeout waiting for pods in %s namespace to be ready: %w", namespaceName, err)
+	}
+
+	return nil
+}
+
+// Deploy and run Cilium Connectivity Checks, set of deployments that will
+// perform a series of connectivity checks via liveness and readiness checks.
+// An unhealthy/unready pod indicates a problem.
+func VerifyCiliumConnectivityChecks(ciliumVersion string) HostedClusterVerifier {
+	return verifyCiliumConnectivityChecks{ciliumVersion: ciliumVersion}
 }
