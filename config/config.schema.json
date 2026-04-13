@@ -2414,6 +2414,21 @@
         "enabled"
       ]
     },
+    "imageRegistryPolicy": {
+      "type": "object",
+      "properties": {
+        "extraAllowedRegistries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "extraAllowedRegistries"
+      ]
+    },
     "acrPull": {
       "type": "object",
       "properties": {
@@ -3181,6 +3196,7 @@
     "global",
     "hypershift",
     "imageSync",
+    "imageRegistryPolicy",
     "acrPull",
     "secretSyncController",
     "maestro",
