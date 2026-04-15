@@ -98,6 +98,8 @@ defaults:
   # Image Registry Policy
   imageRegistryPolicy:
     extraAllowedRegistries: []
+    validationActions:
+    - Audit
   # ACR Pull
   acrPull:
     image:
@@ -1210,6 +1212,8 @@ clouds:
         - jaegertracing
         - grafana
         - otel
+        validationActions:
+        - Deny
       # ACRs
       acr:
         svc:
