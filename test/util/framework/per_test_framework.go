@@ -971,6 +971,10 @@ func (tc *perItOrDescribeTestContext) PullSecretPath() string {
 	return tc.perBinaryInvocationTestContext.pullSecretPath
 }
 
+// FindVirtualMachineSizeMatching queries Azure for available VM sizes in the test location
+// and returns a randomly selected size name that matches the provided regex pattern.
+// This is useful for finding VM sizes that meet specific criteria (e.g., matching a family like "Standard_D.*")
+// while avoiding bias towards any particular size.
 func (tc *perItOrDescribeTestContext) FindVirtualMachineSizeMatching(ctx context.Context, pattern *regexp.Regexp) (string, error) {
 	if pattern == nil {
 		return "", fmt.Errorf("pattern cannot be nil")
