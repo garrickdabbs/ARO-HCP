@@ -18,8 +18,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/onsi/ginkgo/v2"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -152,4 +158,113 @@ func GetVirtualMachinesInResourceGroup(
 		case <-time.After(pollInterval):
 		}
 	}
+}
+
+// GetVirtualMachineConsoleLog retrieves the boot diagnostics serial console log from an Azure VM.
+// Returns an io.ReadCloser for streaming the console log data. The caller is responsible for closing the reader.
+// Returns an error if the retrieval fails or boot diagnostics is not enabled.
+func GetVirtualMachineConsoleLog(
+	ctx context.Context,
+	computeClientFactory *armcompute.ClientFactory,
+	resourceGroupName string,
+	vmName string,
+) (io.ReadCloser, error) {
+	vmClient := computeClientFactory.NewVirtualMachinesClient()
+
+	// Retrieve boot diagnostics data which includes the serial console log
+	result, err := vmClient.RetrieveBootDiagnosticsData(ctx, resourceGroupName, vmName, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve boot diagnostics data for VM %q: %w", vmName, err)
+	}
+
+	// Check if serial console log URI is available
+	if result.SerialConsoleLogBlobURI == nil || *result.SerialConsoleLogBlobURI == "" {
+		return nil, fmt.Errorf("serial console log URI not available for VM %q (boot diagnostics may not be enabled)", vmName)
+	}
+
+	// Fetch the actual log content from the blob storage URL
+	resp, err := http.Get(*result.SerialConsoleLogBlobURI)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch console log from blob storage for VM %q: %w", vmName, err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("failed to fetch console log for VM %q, HTTP status: %d", vmName, resp.StatusCode)
+	}
+
+	return resp.Body, nil
+}
+
+// DownloadAllVirtualMachineConsoleLogs downloads boot diagnostics console logs for all VMs
+// in the specified resource group and saves them to the target directory.
+// Each log file is named "<vmName>-console.log". VMs without boot diagnostics enabled are skipped.
+// Returns an error if the directory cannot be created or if listing VMs fails.
+func DownloadAllVirtualMachineConsoleLogs(
+	ctx context.Context,
+	computeClientFactory *armcompute.ClientFactory,
+	resourceGroupName string,
+	targetDirectory string,
+) error {
+	logger := ginkgo.GinkgoLogr
+
+	// Create target directory if it doesn't exist
+	if err := os.MkdirAll(targetDirectory, 0755); err != nil {
+		return fmt.Errorf("failed to create target directory %q: %w", targetDirectory, err)
+	}
+
+	// List all VMs in the resource group
+	// Use 0 as expectedMinimumCount to return immediately with whatever VMs exist,
+	// as we expect to run this after a node pool deployment failures
+	vms, err := GetVirtualMachinesInResourceGroup(ctx, computeClientFactory, resourceGroupName, 0, 5*time.Minute)
+	if err != nil {
+		return fmt.Errorf("failed to list VMs: %w", err)
+	}
+
+	if len(vms) == 0 {
+		return fmt.Errorf("no VMs found in resource group %q", resourceGroupName)
+	}
+
+	// Download console log for each VM
+	var downloadErrors []string
+	for _, vm := range vms {
+		if vm.Name == nil {
+			continue
+		}
+
+		logReader, err := GetVirtualMachineConsoleLog(ctx, computeClientFactory, resourceGroupName, *vm.Name)
+		if err != nil {
+			// Don't fail completely if one VM doesn't have boot diagnostics enabled
+			logger.Info("failed to fetch VM console log", "vmName", *vm.Name)
+			downloadErrors = append(downloadErrors, fmt.Sprintf("VM %q: %v", *vm.Name, err))
+			continue
+		}
+
+		// Save the console log to a file
+		logFilePath := filepath.Join(targetDirectory, fmt.Sprintf("%s-console.log", *vm.Name))
+		logFile, err := os.Create(logFilePath)
+		if err != nil {
+			logReader.Close()
+			downloadErrors = append(downloadErrors, fmt.Sprintf("VM %q: failed to create file: %v", *vm.Name, err))
+			continue
+		}
+
+		_, err = io.Copy(logFile, logReader)
+		logFile.Close()
+		logReader.Close()
+
+		logger.Info("VM console log fetched", "vmName", *vm.Name, "targetPath", logFilePath)
+
+		if err != nil {
+			downloadErrors = append(downloadErrors, fmt.Sprintf("VM %q: failed to write log: %v", *vm.Name, err))
+			continue
+		}
+	}
+
+	// If there were any errors, return them as a combined error message
+	if len(downloadErrors) > 0 {
+		return fmt.Errorf("encountered errors downloading console logs:\n  - %s", strings.Join(downloadErrors, "\n  - "))
+	}
+
+	return nil
 }

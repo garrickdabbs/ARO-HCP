@@ -234,7 +234,9 @@ var _ = Describe("Authorized CIDRs", func() {
 				nodePoolParams.Replicas = int32(2)
 
 				err = tc.CreateNodePoolFromParam(ctx,
+					GinkgoLogr,
 					*resourceGroup.Name,
+					managedResourceGroupName,
 					clusterName,
 					nodePoolParams,
 					framework.NodePoolCreationTimeout,

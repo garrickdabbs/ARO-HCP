@@ -158,7 +158,9 @@ var _ = Describe("ARO-HCP", func() {
 			By(fmt.Sprintf("creating node pool %q with version '%s' on %s channel", nodePoolName, nodePoolParams.OpenshiftVersionId, nodePoolChannelGroup))
 			err = tc.CreateNodePoolFromParam(
 				ctx,
+				GinkgoLogr,
 				*resourceGroup.Name,
+				managedResourceGroupName,
 				clusterName,
 				nodePoolParams,
 				framework.NodePoolCreationTimeout,

@@ -117,7 +117,9 @@ var _ = Describe("Customer", func() {
 				group.Go(func() error {
 					createErr := tc.CreateNodePoolFromParam(
 						groupCtx,
+						GinkgoLogr,
 						*resourceGroup.Name,
+						managedResourceGroupName,
 						customerClusterName,
 						nodePoolParams,
 						framework.NodePoolCreationTimeout,
