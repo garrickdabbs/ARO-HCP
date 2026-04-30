@@ -29,7 +29,8 @@ DEEPCOPY_GEN="${DEEPCOPY_GEN:-deepcopy-gen}"
   --output-file zz_generated.deepcopy.go \
   --go-header-file "${REPO_ROOT}/hack/boilerplate.go.txt" \
   github.com/Azure/ARO-HCP/internal/api \
-  github.com/Azure/ARO-HCP/internal/api/arm
+  github.com/Azure/ARO-HCP/internal/api/arm \
+  github.com/Azure/ARO-HCP/internal/api/kubeapplier
 
 # Post-process generated files.
 #
@@ -45,7 +46,8 @@ DEEPCOPY_GEN="${DEEPCOPY_GEN:-deepcopy-gen}"
 # replace with a direct assignment.
 for f in \
   "${REPO_ROOT}/internal/api/zz_generated.deepcopy.go" \
-  "${REPO_ROOT}/internal/api/arm/zz_generated.deepcopy.go"; do
+  "${REPO_ROOT}/internal/api/arm/zz_generated.deepcopy.go" \
+  "${REPO_ROOT}/internal/api/kubeapplier/zz_generated.deepcopy.go"; do
 
   if [[ ! -f "${f}" ]]; then
     continue

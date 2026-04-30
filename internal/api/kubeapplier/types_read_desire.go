@@ -1,14 +1,33 @@
+// Copyright 2026 Microsoft Corporation
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package kubeapplier
 
 import (
-	"github.com/Azure/ARO-HCP/internal/api"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/Azure/ARO-HCP/internal/api"
 )
 
+// ReadDesire indicates a kube item in .spec.targetItem to issue a list/watch+informer for.
+// +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ReadDesire struct {
-	// CosmosMetadata ResourceID is nested under the cluster or nodepool so that association and cleanup work as expected
-	// it will be the ReadDesire type
+	// CosmosMetadata.ResourceID is nested under an HCPOpenShiftCluster (and
+	// optionally a NodePool) so that listing the partition by parent prefix
+	// naturally returns the desires associated with that resource — and so
+	// that cluster/nodepool deletion can sweep them.
 	api.CosmosMetadata `json:"cosmosMetadata"`
 
 	Spec ReadDesireSpec `json:"spec"`
@@ -17,12 +36,17 @@ type ReadDesire struct {
 }
 
 type ReadDesireSpec struct {
-	// ManagementCluster specifies the identifier for the management cluster responsible for handling the desired state application.
+	// ManagementCluster names the management cluster whose kube-applier should
+	// reconcile this desire. It is the cosmos partition key for the
+	// kube-applier container; entries from one management cluster never see
+	// entries from another.
 	// TODO this may end up changing to be a resourceID
 	ManagementCluster string `json:"managementCluster"`
 
-	// TargetItem is a group, resource, namespace, name that will be read from the Management Cluster.
-	// It will periodically refresh its view. There is no guarantee of frequency or inidication of age.
+	// TargetItem identifies the single kube object to read. The kube-applier
+	// runs a per-instance list/watch+informer scoped to this exact name and
+	// mirrors the live object into .status.kubeContent. Refresh frequency is
+	// not contractual, and .status carries no explicit observed-at timestamp.
 	TargetItem ResourceReference `json:"targetItem,omitempty"`
 }
 
@@ -34,7 +58,17 @@ type ResourceReference struct {
 }
 
 type ReadDesireStatus struct {
+	// Conditions reports per-desire reconciliation status. Well-known types:
+	//   - "Successful":   the informer has synced and KubeContent reflects
+	//                     the last observation.
+	//   - "Degraded":     the controller is not making progress for an
+	//                     out-of-band reason.
+	//   - "WatchStarted": the per-instance informer has been launched.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
+	// KubeContent holds the most recently observed state of TargetItem. It
+	// is empty (zero RawExtension) when the target does not exist in the
+	// cluster — distinguish that from "not yet observed" via the
+	// "Successful" condition.
 	KubeContent runtime.RawExtension `json:"kubeContent"`
 }
