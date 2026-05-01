@@ -2,8 +2,10 @@
 
 ## Goals
 
-1. Make a new Cosmos container, `kube-applier`, available alongside
-   `Resources`, `Billing`, `Locks`.
+1. Make a new Cosmos container, `kube-applier`, available as a *standalone*
+   client. The kube-applier binary's Cosmos credentials are scoped to that
+   single container (and ultimately a single partition within it), so the
+   binary must not be able to reach any other container at the type level.
 2. Provide single-partition `ResourceCRUD[T]` accessors keyed by management
    cluster (one accessor per `*Desire` type).
 3. Provide a cross-partition `GlobalLister[T]` for each `*Desire` type so the
@@ -21,26 +23,40 @@ Reference files:
 - `internal/database/global_lister.go:38-82` &mdash; `GlobalListers`
   interface and per-type `cosmosGlobalLister`.
 
+## Key design constraint &mdash; do not extend `DBClient` or `GlobalListers`
+
+The kube-applier binary will be issued Cosmos credentials that grant it
+**only** access to the `kube-applier` container, scoped to its own management
+cluster's partition. Reusing the `DBClient` interface for it would compile
+just fine but would offer methods (`HCPClusters`, `Operations`, &hellip;)
+that would fail at runtime against a real container the binary cannot read.
+That is a pit of failure we want to design out at the type level.
+
+So we keep two completely separate client surfaces:
+
+| Client                | Containers it touches | Used by |
+| --- | --- | --- |
+| `DBClient` (existing) | `Resources`, `Billing`, `Locks` &mdash; **not** `kube-applier` | frontend, backend, admin, etc. |
+| `KubeApplierClient` (new) | `kube-applier` only | the kube-applier binary, *and* the backend (which holds wider creds and uses it to write `*Desire`s) |
+
+The same applies to the cross-partition listers: existing
+`database.GlobalListers` stays untouched; a new
+`KubeApplierGlobalListers` lives on `KubeApplierClient`.
+
 ## Work items
 
-### 3.1 Add the container constant + client field
+### 3.1 Add the container constant + partition-key helper
 
 Edit `internal/database/database.go`:
 
 ```go
 const (
-    billingContainer    = "Billing"
-    locksContainer      = "Locks"
-    resourcesContainer  = "Resources"
+    billingContainer     = "Billing"
+    locksContainer       = "Locks"
+    resourcesContainer   = "Resources"
     kubeApplierContainer = "kube-applier"
 )
 ```
-
-Extend `cosmosDBClient` with a `kubeApplier *azcosmos.ContainerClient` field
-and populate it in `NewDBClient`. Mirror the existing pattern exactly for
-each of the other three containers.
-
-### 3.2 Custom partition-key helper
 
 Add a sibling helper to `NewPartitionKey`:
 
@@ -53,22 +69,38 @@ func NewKubeApplierPartitionKey(managementCluster string) azcosmos.PartitionKey 
 ```
 
 This lives next to `NewPartitionKey` so the deviation is visible to anyone
-auditing partition strategy.
+auditing partition strategy. The constant and helper are shared between the
+existing client and the new one but no other change is made to
+`cosmosDBClient` or `NewDBClient`.
 
-### 3.3 New CRUD file: `crud_kube_applier.go`
+### 3.2 New file: `kube_applier_client.go`
 
-Define a top-level entry point on the `DBClient` interface:
+Define the standalone client surface:
 
 ```go
-type DBClient interface {
-    // ... existing methods ...
+// KubeApplierClient is the database surface used by the kube-applier binary.
+// It is intentionally narrower than DBClient because the kube-applier pod's
+// Cosmos credentials are scoped to a single container.
+type KubeApplierClient interface {
+    // KubeApplier returns CRUD accessors scoped to a single management-cluster
+    // partition.
     KubeApplier(managementCluster string) KubeApplierCRUD
+
+    // GlobalListers returns cross-partition listers for the *Desire types.
+    // Only callers with container-wide credentials (the backend) should use this.
+    GlobalListers() KubeApplierGlobalListers
 }
 
 type KubeApplierCRUD interface {
-    ApplyDesires(parent ResourceParent) ResourceCRUD[kubeapplier.ApplyDesire]
-    DeleteDesires(parent ResourceParent) ResourceCRUD[kubeapplier.DeleteDesire]
-    ReadDesires(parent ResourceParent) ResourceCRUD[kubeapplier.ReadDesire]
+    ApplyDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.ApplyDesire], error)
+    DeleteDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.DeleteDesire], error)
+    ReadDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.ReadDesire], error)
+}
+
+type KubeApplierGlobalListers interface {
+    ApplyDesires() GlobalLister[kubeapplier.ApplyDesire]
+    DeleteDesires() GlobalLister[kubeapplier.DeleteDesire]
+    ReadDesires() GlobalLister[kubeapplier.ReadDesire]
 }
 
 // ResourceParent identifies what the *Desires are nested under.
@@ -79,88 +111,67 @@ type ResourceParent struct {
     ClusterName       string
     NodePoolName      string // optional
 }
+
+// NewKubeApplierClient instantiates a KubeApplierClient from a Cosmos
+// DatabaseClient. It opens *only* the kube-applier container.
+func NewKubeApplierClient(database *azcosmos.DatabaseClient) (KubeApplierClient, error)
+
+// NewKubeApplierClientFromContainer wraps an already-opened container; useful
+// when the caller has constructed the container client itself.
+func NewKubeApplierClientFromContainer(container *azcosmos.ContainerClient) KubeApplierClient
 ```
 
 Implementation notes:
 
-- The resource-ID prefix that `NewCosmosResourceCRUD` needs is built from
-  `ResourceParent` plus the resource type. Mirror
-  `crud_hcpcluster.go:NodePools()` exactly &mdash; the nesting is one level
-  deeper.
-- The `azcosmos.ContainerClient` passed to `NewCosmosResourceCRUD` is the
-  new `kubeApplier` container, **not** `resources`.
-- Override the partition-key callback so it uses
-  `NewKubeApplierPartitionKey(managementCluster)` instead of the generic
-  `NewPartitionKey(subscription)`. Read
-  `crud_nested_resource.go` to see if this is parameterised today; if not,
-  add a constructor variant `NewCosmosResourceCRUDWithPartitionKey(...)`
-  that takes a partition-key function.
+- The kube-applier binary calls `NewKubeApplierClient` with credentials
+  scoped to the kube-applier container.
+- The backend, which already builds an `azcosmos.DatabaseClient` with
+  broader credentials, *also* calls `NewKubeApplierClient` to get the
+  kube-applier surface. It does not reach kube-applier through `DBClient`.
+- The CRUD impl reuses the existing low-level helpers (`get`, `list`,
+  `deleteResource`, etc.) for read paths; for create/replace it uses the
+  kube-applier-aware helpers (`createKubeApplier`, `replaceKubeApplier`,
+  &hellip;) that validate the caller-supplied partition key matches the
+  *Desire's `Spec.ManagementCluster` rather than the resource ID's
+  subscription ID.
+- `KubeApplierGlobalListers` impls union the cluster- and node-pool-scoped
+  resource types in a single cross-partition query, mirroring the
+  ManagementClusterContent global lister.
 
-### 3.4 GlobalListers extension
+### 3.3 Cosmos document wrapper
 
-Add three methods to `GlobalListers`:
+We continue to use `GenericDocument[T]` as the cosmos envelope, but the
+type-switch in `convert_any.go` routes the three `*Desire` types through
+`InternalToCosmosKubeApplier[T]`, which sets `partitionKey` from
+`spec.managementCluster` instead of the resource ID's subscription ID.
 
-```go
-type GlobalListers interface {
-    // ... existing ...
-    ApplyDesires() GlobalLister[kubeapplier.ApplyDesire]
-    DeleteDesires() GlobalLister[kubeapplier.DeleteDesire]
-    ReadDesires() GlobalLister[kubeapplier.ReadDesire]
-}
-```
+This is the only convert-layer change. `CosmosToInternal` already handles
+`GenericDocument[T]` via its default case.
 
-Implementations call `list[InternalAPIType, CosmosAPIType](ctx, l.kubeApplier, "", &resourceType, nil, options, false)` &mdash;
-note the empty partition key string forces a cross-partition query, exactly
-as the existing `cosmosGlobalLister` does at `global_lister.go:158-161`.
+### 3.4 Tests
 
-The constructor `NewCosmosGlobalListers` must take the new container:
+- Unit tests for `ResourceParent.resourceID()` producing the exact format
+  described in the readme (with and without nodepool).
+- A round-trip create/get test using the mock client (proves the partition
+  key carried in the cosmos envelope is the management cluster, not the
+  subscription ID).
+- A test that the cross-partition `ApplyDesires().List()` unions cluster-
+  and node-pool-scoped resource types.
 
-```go
-func NewCosmosGlobalListers(
-    resources *azcosmos.ContainerClient,
-    billing *azcosmos.ContainerClient,
-    kubeApplier *azcosmos.ContainerClient,
-) GlobalListers
-```
+### 3.5 Mocks &mdash; `internal/databasetesting`
 
-This is a breaking change to one constructor &mdash; update its only call
-site in `NewDBClient`.
+Mirror the production split:
 
-### 3.5 Cosmos document wrapper types
-
-Each `internal/api` type that lives in Cosmos has a sibling `database.*`
-struct (e.g. `database.HCPCluster` for `api.HCPOpenShiftCluster`). Follow
-the same convention:
-
-- `internal/database/types_apply_desire.go` &mdash; `KubeApplyDesire`
-- `internal/database/types_delete_desire.go` &mdash; `KubeDeleteDesire`
-- `internal/database/types_read_desire.go` &mdash; `KubeReadDesire`
-
-Each is a thin envelope that adds the cosmos-document fields (`id`,
-`partitionKey`, `_etag`) and round-trips to the internal API type. Mirror
-`internal/database/types_management_cluster_content.go`.
-
-### 3.6 Tests
-
-- Unit tests for the partition-key helper (round-trip case, lowercase
-  invariant).
-- Unit tests for `ResourceParent.ResourceIDString()` producing the exact
-  format described in the readme (with and without nodepool).
-- Round-trip serialisation tests for each of the three `database.*` envelope
-  types.
-
-### 3.7 Mocks
-
-Update `internal/databasetesting`:
-
-- `mock_dbclient.go` &mdash; add a `kubeApplier` keyspace; implement the
-  `KubeApplier(...)` accessor returning a mock CRUD that respects the new
-  partition-key invariants.
-- `mock_global_lister.go` &mdash; add `ApplyDesires`, `DeleteDesires`,
-  `ReadDesires` global listers using the existing
-  `mockTypedGlobalLister[Internal, Cosmos]` generic pattern.
-- `mock_init.go` &mdash; teach `NewMockDBClientWithResources` to accept and
-  partition `*kubeapplier.{Apply,Delete,Read}Desire` objects.
+- `MockDBClient` (existing) is unchanged. It does **not** know about
+  kube-applier.
+- `MockKubeApplierClient` (new) is a standalone in-memory implementation of
+  `KubeApplierClient` with its own document store.
+- A small `mockDocumentStore` interface lets the existing
+  `mockResourceCRUD[T]` machinery be reused by the new mock without copying
+  CRUD code.
+- `NewMockKubeApplierClient()` and
+  `NewMockKubeApplierClientWithResources(ctx, []any{...})` are the public
+  test entry points, parallel to `NewMockDBClient*`.
 
 ## Risks / things to watch
 
@@ -175,3 +186,7 @@ Update `internal/databasetesting`:
 - **Container creation pipeline.** The container itself is created by IaC
   (bicep). Adding the container to `dev-infrastructure/` is in scope for
   Doc 06 / 08, not for the database client PR itself.
+- **Two clients in the backend process.** The backend will hold both a
+  `DBClient` and a `KubeApplierClient`. They are intentionally independent;
+  they are not joined under a parent struct. Any future cross-cutting
+  concern (metrics, tracing) must be wired in twice.
