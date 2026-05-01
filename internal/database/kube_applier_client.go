@@ -46,14 +46,39 @@ type KubeApplierClient interface {
 	// Only callers with container-wide credentials (i.e. the backend) should
 	// use this.
 	GlobalListers() KubeApplierGlobalListers
+
+	// PartitionListers returns listers scoped to a single management-cluster
+	// partition. The interface shape matches GlobalListers, but each List call
+	// queries only the named partition. The kube-applier binary uses this so
+	// it can feed informers without holding container-wide credentials.
+	PartitionListers(managementCluster string) KubeApplierGlobalListers
+}
+
+// KubeApplierApplyDesireCRUD provides parent-scoped ResourceCRUD access to
+// ApplyDesires within a single management-cluster partition. Callers that work
+// with ApplyDesires across many parents (e.g. the ApplyDesireController) take
+// this peer interface so they can build the right CRUD per desire.
+type KubeApplierApplyDesireCRUD interface {
+	ApplyDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.ApplyDesire], error)
+}
+
+// KubeApplierDeleteDesireCRUD is the DeleteDesire peer of KubeApplierApplyDesireCRUD.
+type KubeApplierDeleteDesireCRUD interface {
+	DeleteDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.DeleteDesire], error)
+}
+
+// KubeApplierReadDesireCRUD is the ReadDesire peer of KubeApplierApplyDesireCRUD.
+type KubeApplierReadDesireCRUD interface {
+	ReadDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.ReadDesire], error)
 }
 
 // KubeApplierCRUD scopes ResourceCRUD accessors to a single management-cluster
-// partition. It is constructed from KubeApplierClient.KubeApplier(managementCluster).
+// partition. It is constructed from KubeApplierClient.KubeApplier(managementCluster)
+// and is the union of the per-type peer interfaces above.
 type KubeApplierCRUD interface {
-	ApplyDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.ApplyDesire], error)
-	DeleteDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.DeleteDesire], error)
-	ReadDesires(parent ResourceParent) (ResourceCRUD[kubeapplier.ReadDesire], error)
+	KubeApplierApplyDesireCRUD
+	KubeApplierDeleteDesireCRUD
+	KubeApplierReadDesireCRUD
 }
 
 // KubeApplierGlobalListers provides cross-partition listers for the three
@@ -135,6 +160,13 @@ func (c *cosmosKubeApplierClient) GlobalListers() KubeApplierGlobalListers {
 	return &cosmosKubeApplierGlobalListers{container: c.container}
 }
 
+func (c *cosmosKubeApplierClient) PartitionListers(managementCluster string) KubeApplierGlobalListers {
+	return &cosmosKubeApplierGlobalListers{
+		container:    c.container,
+		partitionKey: strings.ToLower(managementCluster),
+	}
+}
+
 // kubeApplierCRUD implements KubeApplierCRUD against a Cosmos container.
 type kubeApplierCRUD struct {
 	containerClient   *azcosmos.ContainerClient
@@ -186,8 +218,11 @@ func (k *kubeApplierCRUD) ReadDesires(parent ResourceParent) (ResourceCRUD[kubea
 }
 
 // cosmosKubeApplierGlobalListers implements KubeApplierGlobalListers against a Cosmos container.
+// An empty partitionKey means "list cross-partition"; a non-empty value scopes every query to
+// that single partition.
 type cosmosKubeApplierGlobalListers struct {
-	container *azcosmos.ContainerClient
+	container    *azcosmos.ContainerClient
+	partitionKey string
 }
 
 var _ KubeApplierGlobalListers = &cosmosKubeApplierGlobalListers{}
@@ -195,6 +230,7 @@ var _ KubeApplierGlobalListers = &cosmosKubeApplierGlobalListers{}
 func (g *cosmosKubeApplierGlobalListers) ApplyDesires() GlobalLister[kubeapplier.ApplyDesire] {
 	return &cosmosKubeApplierDesireGlobalLister[kubeapplier.ApplyDesire, GenericDocument[kubeapplier.ApplyDesire]]{
 		containerClient: g.container,
+		partitionKey:    g.partitionKey,
 		resourceTypes: []azcorearm.ResourceType{
 			kubeapplier.ClusterScopedApplyDesireResourceType,
 			kubeapplier.NodePoolScopedApplyDesireResourceType,
@@ -205,6 +241,7 @@ func (g *cosmosKubeApplierGlobalListers) ApplyDesires() GlobalLister[kubeapplier
 func (g *cosmosKubeApplierGlobalListers) DeleteDesires() GlobalLister[kubeapplier.DeleteDesire] {
 	return &cosmosKubeApplierDesireGlobalLister[kubeapplier.DeleteDesire, GenericDocument[kubeapplier.DeleteDesire]]{
 		containerClient: g.container,
+		partitionKey:    g.partitionKey,
 		resourceTypes: []azcorearm.ResourceType{
 			kubeapplier.ClusterScopedDeleteDesireResourceType,
 			kubeapplier.NodePoolScopedDeleteDesireResourceType,
@@ -215,6 +252,7 @@ func (g *cosmosKubeApplierGlobalListers) DeleteDesires() GlobalLister[kubeapplie
 func (g *cosmosKubeApplierGlobalListers) ReadDesires() GlobalLister[kubeapplier.ReadDesire] {
 	return &cosmosKubeApplierDesireGlobalLister[kubeapplier.ReadDesire, GenericDocument[kubeapplier.ReadDesire]]{
 		containerClient: g.container,
+		partitionKey:    g.partitionKey,
 		resourceTypes: []azcorearm.ResourceType{
 			kubeapplier.ClusterScopedReadDesireResourceType,
 			kubeapplier.NodePoolScopedReadDesireResourceType,
@@ -223,12 +261,13 @@ func (g *cosmosKubeApplierGlobalListers) ReadDesires() GlobalLister[kubeapplier.
 }
 
 // cosmosKubeApplierDesireGlobalLister lists *Desire documents (one kind per
-// instance) across every management-cluster partition of the kube-applier
-// container, unioning the cluster-scoped and node-pool-scoped resource types
-// in a single cross-partition query.
+// instance) of the kube-applier container, unioning the cluster-scoped and
+// node-pool-scoped resource types in a single query. An empty partitionKey
+// means "cross-partition"; a non-empty value restricts to that partition.
 type cosmosKubeApplierDesireGlobalLister[InternalAPIType, CosmosAPIType any] struct {
 	containerClient *azcosmos.ContainerClient
 	resourceTypes   []azcorearm.ResourceType
+	partitionKey    string
 }
 
 func (l *cosmosKubeApplierDesireGlobalLister[InternalAPIType, CosmosAPIType]) List(
@@ -251,7 +290,11 @@ func (l *cosmosKubeApplierDesireGlobalLister[InternalAPIType, CosmosAPIType]) Li
 		queryOptions.ContinuationToken = options.ContinuationToken
 	}
 
-	pager := l.containerClient.NewQueryItemsPager(query, azcosmos.NewPartitionKey(), &queryOptions)
+	pk := azcosmos.NewPartitionKey()
+	if len(l.partitionKey) > 0 {
+		pk = azcosmos.NewPartitionKeyString(l.partitionKey)
+	}
+	pager := l.containerClient.NewQueryItemsPager(query, pk, &queryOptions)
 
 	if options != nil && ptr.Deref(options.PageSizeHint, -1) > 0 {
 		return newQueryResourcesSinglePageIterator[InternalAPIType, CosmosAPIType](pager), nil

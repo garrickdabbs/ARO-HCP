@@ -128,6 +128,13 @@ func (m *MockKubeApplierClient) GlobalListers() database.KubeApplierGlobalLister
 	return &mockKubeApplierGlobalListers{store: m}
 }
 
+func (m *MockKubeApplierClient) PartitionListers(managementCluster string) database.KubeApplierGlobalListers {
+	return &mockKubeApplierGlobalListers{
+		store:        m,
+		partitionKey: strings.ToLower(managementCluster),
+	}
+}
+
 type mockKubeApplierCRUD struct {
 	store             *MockKubeApplierClient
 	managementCluster string
@@ -197,14 +204,16 @@ func desireParentID(parent database.ResourceParent) (*azcorearm.ResourceID, erro
 // --- KubeApplierGlobalListers ------------------------------------------------
 
 type mockKubeApplierGlobalListers struct {
-	store *MockKubeApplierClient
+	store        *MockKubeApplierClient
+	partitionKey string // empty = cross-partition; non-empty = restrict to this partition
 }
 
 var _ database.KubeApplierGlobalListers = &mockKubeApplierGlobalListers{}
 
 func (g *mockKubeApplierGlobalListers) ApplyDesires() database.GlobalLister[kubeapplier.ApplyDesire] {
 	return &mockKubeApplierDesireGlobalLister[kubeapplier.ApplyDesire, database.GenericDocument[kubeapplier.ApplyDesire]]{
-		store: g.store,
+		store:        g.store,
+		partitionKey: g.partitionKey,
 		resourceTypes: []azcorearm.ResourceType{
 			kubeapplier.ClusterScopedApplyDesireResourceType,
 			kubeapplier.NodePoolScopedApplyDesireResourceType,
@@ -214,7 +223,8 @@ func (g *mockKubeApplierGlobalListers) ApplyDesires() database.GlobalLister[kube
 
 func (g *mockKubeApplierGlobalListers) DeleteDesires() database.GlobalLister[kubeapplier.DeleteDesire] {
 	return &mockKubeApplierDesireGlobalLister[kubeapplier.DeleteDesire, database.GenericDocument[kubeapplier.DeleteDesire]]{
-		store: g.store,
+		store:        g.store,
+		partitionKey: g.partitionKey,
 		resourceTypes: []azcorearm.ResourceType{
 			kubeapplier.ClusterScopedDeleteDesireResourceType,
 			kubeapplier.NodePoolScopedDeleteDesireResourceType,
@@ -224,7 +234,8 @@ func (g *mockKubeApplierGlobalListers) DeleteDesires() database.GlobalLister[kub
 
 func (g *mockKubeApplierGlobalListers) ReadDesires() database.GlobalLister[kubeapplier.ReadDesire] {
 	return &mockKubeApplierDesireGlobalLister[kubeapplier.ReadDesire, database.GenericDocument[kubeapplier.ReadDesire]]{
-		store: g.store,
+		store:        g.store,
+		partitionKey: g.partitionKey,
 		resourceTypes: []azcorearm.ResourceType{
 			kubeapplier.ClusterScopedReadDesireResourceType,
 			kubeapplier.NodePoolScopedReadDesireResourceType,
@@ -235,6 +246,7 @@ func (g *mockKubeApplierGlobalListers) ReadDesires() database.GlobalLister[kubea
 type mockKubeApplierDesireGlobalLister[InternalAPIType, CosmosAPIType any] struct {
 	store         *MockKubeApplierClient
 	resourceTypes []azcorearm.ResourceType
+	partitionKey  string
 }
 
 func (l *mockKubeApplierDesireGlobalLister[InternalAPIType, CosmosAPIType]) List(
@@ -258,6 +270,9 @@ func (l *mockKubeApplierDesireGlobalLister[InternalAPIType, CosmosAPIType]) List
 			}
 		}
 		if !matches {
+			continue
+		}
+		if len(l.partitionKey) > 0 && !strings.EqualFold(typedDoc.PartitionKey, l.partitionKey) {
 			continue
 		}
 		var cosmosObj CosmosAPIType
