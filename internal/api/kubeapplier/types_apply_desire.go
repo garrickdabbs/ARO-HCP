@@ -43,6 +43,13 @@ type ApplyDesireSpec struct {
 	// TODO this may end up changing to be a resourceID
 	ManagementCluster string `json:"managementCluster"`
 
+	// TargetItem identifies the GVR (and optionally the namespace) the kube-applier
+	// will server-side-apply against. The controller uses Group + Resource verbatim
+	// rather than guessing a plural form from KubeContent's kind. Name and Namespace
+	// must agree with KubeContent.metadata.{name,namespace}; the controller does not
+	// re-derive them from the manifest.
+	TargetItem ResourceReference `json:"targetItem"`
+
 	// KubeContent is a single Kubernetes object (not a List) to be applied
 	// with server-side-apply and Force=true. The object must carry apiVersion,
 	// kind, metadata.name, and metadata.namespace if namespaced.

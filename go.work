@@ -6,6 +6,7 @@ use (
 	./backend
 	./frontend
 	./internal
+	./kube-applier
 	./sessiongate
 	./test
 	./test-integration
