@@ -30,13 +30,25 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api"
 	"github.com/Azure/ARO-HCP/internal/api/arm"
+	"github.com/Azure/ARO-HCP/internal/api/fleet"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/utils"
 )
 
+// mockDocumentStore is the minimal interface shared by MockDBClient and
+// MockFleetDBClient so that mockResourceCRUD can operate against either
+// backing store.
+type mockDocumentStore interface {
+	GetDocument(cosmosID string) (json.RawMessage, bool)
+	StoreDocument(cosmosID string, data json.RawMessage)
+	DeleteDocument(cosmosID string)
+	ListDocuments(resourceType *azcorearm.ResourceType, prefix string) []json.RawMessage
+	GetAllDocuments() map[string]json.RawMessage
+}
+
 // mockResourceCRUD is a generic mock implementation of database.ResourceCRUD.
 type mockResourceCRUD[InternalAPIType, CosmosAPIType any] struct {
-	client           *MockResourcesDBClient
+	client           mockDocumentStore
 	parentResourceID *azcorearm.ResourceID
 	resourceType     azcorearm.ResourceType
 	// makeResourceIDPath constructs the full resource ID path from a resource name.
@@ -48,7 +60,7 @@ type mockResourceCRUD[InternalAPIType, CosmosAPIType any] struct {
 }
 
 func newMockResourceCRUD[InternalAPIType, CosmosAPIType any](
-	client *MockResourcesDBClient, parentResourceID *azcorearm.ResourceID, resourceType azcorearm.ResourceType) *mockResourceCRUD[InternalAPIType, CosmosAPIType] {
+	client mockDocumentStore, parentResourceID *azcorearm.ResourceID, resourceType azcorearm.ResourceType) *mockResourceCRUD[InternalAPIType, CosmosAPIType] {
 
 	m := &mockResourceCRUD[InternalAPIType, CosmosAPIType]{
 		client:           client,
@@ -68,6 +80,15 @@ func newMockResourceCRUD[InternalAPIType, CosmosAPIType any](
 }
 
 func (m *mockResourceCRUD[InternalAPIType, CosmosAPIType]) defaultMakeResourceIDPath(resourceID string) (*azcorearm.ResourceID, error) {
+	// Provider-level resources (nil parent) use /providers/<type>/<name>
+	if m.parentResourceID == nil {
+		parts := []string{"/providers", m.resourceType.String()}
+		if len(resourceID) > 0 {
+			parts = append(parts, resourceID)
+		}
+		return azcorearm.ParseResourceID(path.Join(parts...))
+	}
+
 	if len(m.parentResourceID.SubscriptionID) == 0 {
 		return nil, fmt.Errorf("subscriptionID is required")
 	}
@@ -692,7 +713,7 @@ type mockManagementClusterContentCRUD struct {
 	*mockResourceCRUD[api.ManagementClusterContent, database.GenericDocument[api.ManagementClusterContent]]
 }
 
-func newMockManagementClusterContentCRUD(client *MockResourcesDBClient, parentResourceID *azcorearm.ResourceID, resourceType azcorearm.ResourceType) *mockManagementClusterContentCRUD {
+func newMockManagementClusterContentCRUD(client mockDocumentStore, parentResourceID *azcorearm.ResourceID, resourceType azcorearm.ResourceType) *mockManagementClusterContentCRUD {
 	return &mockManagementClusterContentCRUD{
 		mockResourceCRUD: newMockResourceCRUD[api.ManagementClusterContent, database.GenericDocument[api.ManagementClusterContent]](
 			client, parentResourceID, resourceType),
@@ -700,6 +721,24 @@ func newMockManagementClusterContentCRUD(client *MockResourcesDBClient, parentRe
 }
 
 var _ database.ManagementClusterContentCRUD = &mockManagementClusterContentCRUD{}
+
+// mockManagementClusterCRUD implements database.ManagementClusterCRUD.
+type mockManagementClusterCRUD struct {
+	*mockResourceCRUD[fleet.ManagementCluster, database.GenericDocument[fleet.ManagementCluster]]
+}
+
+func newMockManagementClusterCRUD(client mockDocumentStore, parentResourceID *azcorearm.ResourceID) *mockManagementClusterCRUD {
+	return &mockManagementClusterCRUD{
+		mockResourceCRUD: newMockResourceCRUD[fleet.ManagementCluster, database.GenericDocument[fleet.ManagementCluster]](
+			client, parentResourceID, fleet.ManagementClusterResourceType),
+	}
+}
+
+func (m *mockManagementClusterCRUD) Replace(ctx context.Context, newObj, _ *fleet.ManagementCluster, options *azcosmos.ItemOptions) (*fleet.ManagementCluster, error) {
+	return m.mockResourceCRUD.Replace(ctx, newObj, options)
+}
+
+var _ database.ManagementClusterCRUD = &mockManagementClusterCRUD{}
 
 // mockUntypedCRUD implements database.UntypedResourceCRUD.
 type mockUntypedCRUD struct {

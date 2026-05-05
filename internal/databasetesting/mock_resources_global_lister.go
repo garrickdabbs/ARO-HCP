@@ -136,7 +136,7 @@ func (l *mockSubscriptionGlobalLister) List(ctx context.Context, options *databa
 // mockTypedGlobalLister is a generic mock global lister that lists all resources
 // of a given type across all partitions.
 type mockTypedGlobalLister[InternalAPIType, CosmosAPIType any] struct {
-	client       *MockResourcesDBClient
+	client       mockDocumentStore
 	resourceType azcorearm.ResourceType
 }
 

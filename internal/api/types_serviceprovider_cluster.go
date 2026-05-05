@@ -129,6 +129,10 @@ type ServiceProviderClusterStatus struct {
 	// The reference contains a mapping between the logical name we give to the Maestro bundle internally
 	// and the Maestro Bundle Name and ID at the Maestro API level.
 	MaestroReadonlyBundles MaestroBundleReferenceList `json:"maestroReadonlyBundles,omitempty"`
+	// ManagementClusterResourceID is the resource ID of the management cluster
+	// this HCP is placed on. Nil means placement has not been resolved yet.
+	// Once set, this field is immutable.
+	ManagementClusterResourceID *azcorearm.ResourceID `json:"managementClusterResourceID,omitempty"`
 }
 
 // ServiceProviderClusterStatusVersion contains the actual version information.
