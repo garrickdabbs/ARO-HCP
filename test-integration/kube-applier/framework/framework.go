@@ -295,4 +295,3 @@ func deleteNamespace(ctx context.Context, t *testing.T, dyn dynamic.Interface, n
 	gvr := schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
 	_ = dyn.Resource(gvr).Delete(ctx, name, metav1.DeleteOptions{})
 }
-
