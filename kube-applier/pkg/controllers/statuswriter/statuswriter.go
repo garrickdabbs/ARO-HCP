@@ -28,11 +28,16 @@ import (
 	"k8s.io/apimachinery/pkg/api/equality"
 
 	"github.com/Azure/ARO-HCP/internal/database"
-	"github.com/Azure/ARO-HCP/internal/utils"
 )
 
 // Fetcher reads the current state of a single desire by a controller-defined
 // typed key. Implementations typically wrap a lister cache.
+//
+// Implementations MUST return a copy that the caller can mutate safely.
+// Returning a pointer into a shared informer cache is incorrect: the
+// StatusWriter mutates conditions in place via meta.SetStatusCondition,
+// which would corrupt the cache entry and silently defeat the
+// "no-op when unchanged" check below.
 type Fetcher[T any, K comparable] interface {
 	Fetch(ctx context.Context, key K) (*T, error)
 }
@@ -70,12 +75,18 @@ type writer[T any, K comparable] struct {
 //
 //   - Skip the write entirely when mutate produces a deeply-equal copy of the
 //     existing desire — this is the steady state for healthy reconciles.
-//   - Swallow PreconditionFailed (412) errors silently — the cached object is
-//     stale, and the informer will redeliver the new revision.
-//   - Surface every other error to the caller so the workqueue can retry.
+//   - Surface every error to the caller, including PreconditionFailed (412),
+//     so the controller's workqueue retries with backoff. The kube-applier
+//     has multiple controllers writing to the same desire (manager's
+//     WatchStarted vs. per-instance Successful/KubeContent); on conflict the
+//     loser must retry.
+//
+// We Fetch twice to obtain two independent deep-copies of the desire: one to
+// mutate (desired) and one to compare against (existing). A naive
+// `desired := *existing` would share the conditions-slice backing array with
+// existing, and meta.SetStatusCondition mutates conditions in place, so the
+// comparison would always report no change and silently drop writes.
 func (w *writer[T, K]) UpdateStatus(ctx context.Context, key K, mutate MutateFunc[T]) error {
-	logger := utils.LoggerFromContext(ctx)
-
 	existing, err := w.fetcher.Fetch(ctx, key)
 	if err != nil {
 		// NotFound is normal: the desire was deleted between dispatch and now.
@@ -88,18 +99,24 @@ func (w *writer[T, K]) UpdateStatus(ctx context.Context, key K, mutate MutateFun
 		return nil
 	}
 
-	desired := *existing
-	mutate(&desired)
-
-	if equality.Semantic.DeepEqual(existing, &desired) {
+	desired, err := w.fetcher.Fetch(ctx, key)
+	if err != nil {
+		if database.IsNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("fetch %v: %w", key, err)
+	}
+	if desired == nil {
 		return nil
 	}
 
-	if err := w.replacer.Replace(ctx, &desired); err != nil {
-		if database.IsPreconditionFailedError(err) {
-			logger.V(2).Info("status replace lost an etag race; informer will requeue", "key", key)
-			return nil
-		}
+	mutate(desired)
+
+	if equality.Semantic.DeepEqual(existing, desired) {
+		return nil
+	}
+
+	if err := w.replacer.Replace(ctx, desired); err != nil {
 		return fmt.Errorf("replace status for %v: %w", key, err)
 	}
 	return nil

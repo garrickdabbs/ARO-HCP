@@ -163,6 +163,18 @@ func (c *ReadDesireKubernetesController) Run(ctx context.Context) {
 
 	go c.informer.RunWithContext(ctx)
 
+	// Wait for the per-instance informer to sync before letting the worker
+	// pull from the queue. Standard client-go pattern: a worker that runs
+	// against an unsynced cache will see the target as absent and incorrectly
+	// publish an empty Status.KubeContent until events finally arrive.
+	if !cache.WaitForCacheSync(ctx.Done(), c.informer.HasSynced) {
+		logger.Info("per-instance informer cache failed to sync; exiting controller",
+			"gvr", c.gvr.String(),
+			"namespace", c.target.Namespace,
+			"name", c.target.Name)
+		return
+	}
+
 	// Periodic tick so a missing target gets reported even when no event fires.
 	ticker := time.NewTicker(ResyncDuration)
 	defer ticker.Stop()
@@ -177,8 +189,10 @@ func (c *ReadDesireKubernetesController) Run(ctx context.Context) {
 		}
 	}()
 
-	// Seed the queue immediately so the first sync runs without waiting for
-	// the first event or tick.
+	// Seed the queue so the first sync runs without waiting for the first
+	// event or tick. Safe to do here: the informer's AddEventHandler was
+	// registered in the constructor and has already replayed cache contents
+	// once HasSynced returned true above.
 	c.queue.Add(c.key)
 
 	go wait.UntilWithContext(ctx, c.runWorker, time.Second)
@@ -297,6 +311,8 @@ func (c *ReadDesireKubernetesController) singleObjectListWatch() *cache.ListWatc
 }
 
 // readDesireFetcher implements statuswriter.Fetcher over a ReadDesireLister.
+// Returns a DeepCopy so the StatusWriter can safely mutate it; see the
+// apply_desire counterpart for why aliasing the cache would be a bug.
 type readDesireFetcher struct {
 	lister listers.ReadDesireLister
 }
@@ -304,10 +320,17 @@ type readDesireFetcher struct {
 var _ statuswriter.Fetcher[kubeapplier.ReadDesire, keys.ReadDesireKey] = &readDesireFetcher{}
 
 func (f *readDesireFetcher) Fetch(ctx context.Context, key keys.ReadDesireKey) (*kubeapplier.ReadDesire, error) {
+	var got *kubeapplier.ReadDesire
+	var err error
 	if key.IsNodePoolScoped() {
-		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
+		got, err = f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
+	} else {
+		got, err = f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
 	}
-	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+	if err != nil {
+		return nil, err
+	}
+	return got.DeepCopy(), nil
 }
 
 // readDesireReplacer implements statuswriter.Replacer over a

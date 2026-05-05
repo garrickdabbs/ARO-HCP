@@ -1,0 +1,7 @@
+{
+  "apiVersion": "v1",
+  "kind": "ConfigMap",
+  "namespace": "delete-removes-configmap",
+  "name": "doomed",
+  "absent": true
+}
