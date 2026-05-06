@@ -259,7 +259,6 @@ frontend:
     name: frontend-cert-dev-usw3
   cosmosDB:
     billingContainerMaxScale: 4000
-    deploy: true
     disableLocalAuth: true
     locksContainerMaxScale: 4000
     name: arohcpdev-rp-usw3
@@ -423,6 +422,13 @@ imageSync:
     pullSecretName: component-sync-pull-secret
   outboundServiceTags: ""
 keyVaultDNSSuffix: vault.azure.net
+kubeApplier:
+  cosmosContainerMaxScale: 4000
+  cosmosContainerName: Manifests-MC-1
+  k8s:
+    namespace: kube-applier
+    serviceAccountName: kube-applier
+  managedIdentityName: kube-applier
 kubeEvents:
   enabled: true
   image:
