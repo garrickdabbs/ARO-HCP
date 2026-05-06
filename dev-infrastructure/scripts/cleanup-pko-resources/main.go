@@ -35,8 +35,9 @@ func main() {
 	}
 
 	if err := run(timeout); err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "[ERROR] %v\n", err)
+		fmt.Println("=== PKO cleanup completed with errors (best-effort, not blocking rollout) ===")
+		return
 	}
 }
 
@@ -59,7 +60,9 @@ func run(timeout time.Duration) error {
 	}
 
 	ctx := context.Background()
-	fmt.Println("=== Package Operator CR + CRD cleanup ===")
+	var errors int
+
+	fmt.Println("=== Package Operator CR + CRD cleanup (best-effort) ===")
 
 	crds, err := discoverPKOCRDs(ctx, crdClient)
 	if err != nil {
@@ -75,28 +78,32 @@ func run(timeout time.Duration) error {
 		fmt.Printf("  %s (%s)\n", c.Name, c.Scope)
 	}
 
-	deleteCRs(ctx, dynamicClient, crds, timeout)
+	errors += deleteCRs(ctx, dynamicClient, crds, timeout)
 
 	remaining := waitForDeletion(ctx, dynamicClient, crds, 180*time.Second)
 
 	if remaining > 0 {
 		fmt.Printf("\nWARNING: %d CR(s) stuck after 180s — removing finalizers.\n", remaining)
-		stripFinalizers(ctx, dynamicClient, crds)
+		errors += stripFinalizers(ctx, dynamicClient, crds)
 
 		time.Sleep(10 * time.Second)
 
 		remaining = countAllCRs(ctx, dynamicClient, crds)
 		if remaining > 0 {
-			return fmt.Errorf("%d CR(s) still remain after finalizer removal", remaining)
+			fmt.Fprintf(os.Stderr, "[ERROR] %d CR(s) still remain after finalizer removal\n", remaining)
+			errors++
+		} else {
+			fmt.Println("All stuck CRs removed.")
 		}
-		fmt.Println("All stuck CRs removed.")
 	}
 
-	if err := deleteCRDs(ctx, crdClient, crds, timeout); err != nil {
-		return err
-	}
+	errors += deleteCRDs(ctx, crdClient, crds, timeout)
 
-	fmt.Println("\n=== PKO resource cleanup complete ===")
+	if errors > 0 {
+		fmt.Printf("\n=== PKO cleanup completed with %d error(s) (best-effort, not blocking rollout) ===\n", errors)
+	} else {
+		fmt.Println("\n=== PKO resource cleanup complete ===")
+	}
 	return nil
 }
 
@@ -129,7 +136,8 @@ func gvr(c crdInfo) schema.GroupVersionResource {
 	return schema.GroupVersionResource{Group: c.Group, Version: "v1alpha1", Resource: c.Plural}
 }
 
-func deleteCRs(ctx context.Context, client dynamic.Interface, crds []crdInfo, timeout time.Duration) {
+func deleteCRs(ctx context.Context, client dynamic.Interface, crds []crdInfo, timeout time.Duration) int {
+	errors := 0
 	for _, c := range crds {
 		resource := fmt.Sprintf("%s.%s", c.Plural, c.Group)
 		fmt.Printf("\n--- Deleting all %s CRs (%s) ---\n", resource, c.Scope)
@@ -147,8 +155,10 @@ func deleteCRs(ctx context.Context, client dynamic.Interface, crds []crdInfo, ti
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to delete %s: %v\n", resource, err)
+			errors++
 		}
 	}
+	return errors
 }
 
 func countCRs(ctx context.Context, client dynamic.Interface, c crdInfo) int {
@@ -195,8 +205,9 @@ func waitForDeletion(ctx context.Context, client dynamic.Interface, crds []crdIn
 	return countAllCRs(ctx, client, crds)
 }
 
-func stripFinalizers(ctx context.Context, client dynamic.Interface, crds []crdInfo) {
+func stripFinalizers(ctx context.Context, client dynamic.Interface, crds []crdInfo) int {
 	patch := []byte(`{"metadata":{"finalizers":[]}}`)
+	errors := 0
 
 	for _, c := range crds {
 		resource := fmt.Sprintf("%s.%s", c.Plural, c.Group)
@@ -210,6 +221,7 @@ func stripFinalizers(ctx context.Context, client dynamic.Interface, crds []crdIn
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to list %s for finalizer removal: %v\n", resource, err)
+			errors++
 			continue
 		}
 
@@ -229,26 +241,23 @@ func stripFinalizers(ctx context.Context, client dynamic.Interface, crds []crdIn
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[ERROR] failed to patch finalizers on %s/%s: %v\n", resource, name, err)
+				errors++
 			}
 		}
 	}
+	return errors
 }
 
-func deleteCRDs(ctx context.Context, client apiextensionsclient.Interface, crds []crdInfo, timeout time.Duration) error {
+func deleteCRDs(ctx context.Context, client apiextensionsclient.Interface, crds []crdInfo, timeout time.Duration) int {
 	fmt.Println("\nRemoving package-operator.run CRDs...")
 
-	var errs []string
+	errors := 0
 	for _, c := range crds {
 		fmt.Printf("  Deleting CRD: %s\n", c.Name)
-		err := client.ApiextensionsV1().CustomResourceDefinitions().Delete(ctx, c.Name, metav1.DeleteOptions{})
-		if err != nil {
+		if err := client.ApiextensionsV1().CustomResourceDefinitions().Delete(ctx, c.Name, metav1.DeleteOptions{}); err != nil {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to delete CRD %s: %v\n", c.Name, err)
-			errs = append(errs, c.Name)
+			errors++
 		}
 	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("failed to delete %d CRD(s): %s", len(errs), strings.Join(errs, ", "))
-	}
-	return nil
+	return errors
 }
