@@ -60,5 +60,31 @@ resource cosmosDb 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2023-11-15
   }
 }
 
+// Custom SQL role for kube-applier: read, replace, query, change feed (no create/delete)
+var kubeApplierRoleDefinitionId = guid('kube-applier-role', cosmosDbAccount.id)
+
+resource kubeApplierSqlRoleDefinition 'Microsoft.DocumentDB/databaseAccounts/sqlRoleDefinitions@2021-04-15' = {
+  parent: cosmosDbAccount
+  name: kubeApplierRoleDefinitionId
+  properties: {
+    roleName: 'Kube Applier Reader Writer'
+    type: 'CustomRole'
+    assignableScopes: [
+      cosmosDbAccount.id
+    ]
+    permissions: [
+      {
+        dataActions: [
+          'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/read'
+          'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/items/replace'
+          'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/executeQuery'
+          'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers/readChangeFeed'
+        ]
+      }
+    ]
+  }
+}
+
 output cosmosDBName string = name
 output cosmosDBAccountId string = cosmosDbAccount.id
+output kubeApplierSqlRoleDefinitionId string = kubeApplierSqlRoleDefinition.id

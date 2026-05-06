@@ -2224,6 +2224,33 @@
         "namespace"
       ]
     },
+    "kubeApplier": {
+      "type": "object",
+      "properties": {
+        "cosmosContainerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+        },
+        "cosmosContainerMaxScale": {
+          "type": "integer"
+        },
+        "managedIdentityName": {
+          "type": "string"
+        },
+        "k8s": {
+          "$ref": "#/definitions/k8sDeployment"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "cosmosContainerName",
+        "cosmosContainerMaxScale",
+        "managedIdentityName",
+        "k8s"
+      ]
+    },
     "imageSync": {
       "type": "object",
       "properties": {
@@ -3140,6 +3167,7 @@
     "global",
     "hypershift",
     "imageSync",
+    "kubeApplier",
     "acrPull",
     "secretSyncController",
     "maestro",

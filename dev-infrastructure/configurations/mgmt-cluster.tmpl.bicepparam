@@ -50,6 +50,15 @@ param maestroCertDomain = '{{ .maestro.certDomain }}'
 param maestroCertIssuer = '{{ .maestro.certIssuer }}'
 param regionalSvcDNSZoneName = '{{ .dns.regionalSubdomain }}.{{ .dns.svcParentZoneName }}'
 
+// Kube Applier
+param kubeApplierMIName = '{{ .kubeApplier.managedIdentityName }}'
+param kubeApplierNamespace = '{{ .kubeApplier.k8s.namespace }}'
+param kubeApplierServiceAccountName = '{{ .kubeApplier.k8s.serviceAccountName }}'
+param kubeApplierContainerName = '{{ .kubeApplier.cosmosContainerName }}'
+param kubeApplierContainerMaxScale = {{ .kubeApplier.cosmosContainerMaxScale }}
+param rpCosmosDbAccountId = '__rpCosmosDbAccountId__'
+param rpCosmosDbPrivate = {{ .frontend.cosmosDB.private }}
+
 // ACR
 param ocpAcrResourceId = '__ocpAcrResourceId__'
 param svcAcrResourceId = '__svcAcrResourceId__'

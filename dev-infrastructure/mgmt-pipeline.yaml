@@ -217,6 +217,11 @@ resourceGroups:
         resourceGroup: regional
         step: output
         name: maestroEventGridNamespaceId
+    - name: rpCosmosDbAccountId
+      input:
+        resourceGroup: regional
+        step: output
+        name: rpCosmosDbAccountId
     - name: auditLogsEventHubAuthRuleId
       input:
         resourceGroup: auditLogs
