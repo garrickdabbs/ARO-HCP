@@ -933,7 +933,7 @@ defaults:
       tlsCertificatesIssuer: OneCertV2-PublicCA
   # Kube Applier
   kubeApplier:
-    cosmosContainerName: "mc-manifests-{{ .ctx.stamp }}"
+    cosmosContainerName: "Manifests-MC-{{ .ctx.stamp }}"
     cosmosContainerMaxScale: 4000
     managedIdentityName: kube-applier
     k8s:
