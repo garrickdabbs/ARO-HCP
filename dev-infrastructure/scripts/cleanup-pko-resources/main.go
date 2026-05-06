@@ -9,6 +9,7 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclient "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -147,15 +148,32 @@ func deleteCRs(ctx context.Context, client dynamic.Interface, crds []crdInfo, ti
 			PropagationPolicy: &deletePolicy,
 		}
 
-		var err error
 		if c.Scope == apiextensionsv1.NamespaceScoped {
-			err = client.Resource(gvr(c)).Namespace("").DeleteCollection(ctx, opts, metav1.ListOptions{})
+			// The API server does not support cross-namespace DeleteCollection.
+			// List to find which namespaces contain CRs, then delete per namespace.
+			list, err := client.Resource(gvr(c)).Namespace("").List(ctx, metav1.ListOptions{})
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] failed to list %s: %v\n", resource, err)
+				errors++
+				continue
+			}
+
+			namespaces := make(map[string]struct{})
+			for _, item := range list.Items {
+				namespaces[item.GetNamespace()] = struct{}{}
+			}
+
+			for ns := range namespaces {
+				if err := client.Resource(gvr(c)).Namespace(ns).DeleteCollection(ctx, opts, metav1.ListOptions{}); err != nil {
+					fmt.Fprintf(os.Stderr, "[ERROR] failed to delete %s in namespace %s: %v\n", resource, ns, err)
+					errors++
+				}
+			}
 		} else {
-			err = client.Resource(gvr(c)).DeleteCollection(ctx, opts, metav1.ListOptions{})
-		}
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] failed to delete %s: %v\n", resource, err)
-			errors++
+			if err := client.Resource(gvr(c)).DeleteCollection(ctx, opts, metav1.ListOptions{}); err != nil {
+				fmt.Fprintf(os.Stderr, "[ERROR] failed to delete %s: %v\n", resource, err)
+				errors++
+			}
 		}
 	}
 	return errors
@@ -254,7 +272,7 @@ func deleteCRDs(ctx context.Context, client apiextensionsclient.Interface, crds 
 	errors := 0
 	for _, c := range crds {
 		fmt.Printf("  Deleting CRD: %s\n", c.Name)
-		if err := client.ApiextensionsV1().CustomResourceDefinitions().Delete(ctx, c.Name, metav1.DeleteOptions{}); err != nil {
+		if err := client.ApiextensionsV1().CustomResourceDefinitions().Delete(ctx, c.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			fmt.Fprintf(os.Stderr, "[ERROR] failed to delete CRD %s: %v\n", c.Name, err)
 			errors++
 		}
