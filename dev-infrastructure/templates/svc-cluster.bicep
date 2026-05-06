@@ -144,21 +144,14 @@ param opsIngressGatewayIPAddressName string = ''
 @description('IPTags to be set on the Admin API Istio Ingress Gateway IP address in the format of ipTagType:tag,ipTagType:tag')
 param opsIngressGatewayIPAddressTags string = ''
 
-// TODO: When the work around workload identity for the RP is finalized, change this to true
-@description('disableLocalAuth for the ARO HCP RP CosmosDB')
-param disableLocalAuth bool
-
-@description('Deploy ARO HCP RP Azure Cosmos DB if true')
-param deployFrontendCosmos bool
-
 @description('The name of the Cosmos DB for the RP')
 param rpCosmosDbName string
 
 @description('If true, make the Cosmos DB instance private')
 param rpCosmosDbPrivate bool
 
-@description('The zone redundant mode of Cosmos DB instance')
-param rpCosmosZoneRedundantMode string
+@description('The resource ID of the Cosmos DB account for the RP')
+param rpCosmosDbAccountId string
 
 @description('The resourcegroup for regional infrastructure')
 param regionalResourceGroup string
@@ -752,16 +745,12 @@ var frontendMI = mi.getManagedIdentityByName(managedIdentities.outputs.managedId
 var backendMI = mi.getManagedIdentityByName(managedIdentities.outputs.managedIdentities, backendMIName)
 var adminApiMI = mi.getManagedIdentityByName(managedIdentities.outputs.managedIdentities, adminApiMIName)
 
-module rpCosmosDb '../modules/rp-cosmos.bicep' = if (deployFrontendCosmos) {
+module rpCosmosDb '../modules/rp-cosmos.bicep' = if (rpCosmosDbAccountId != '') {
   name: 'rp_cosmos_db'
   scope: resourceGroup(regionalResourceGroup)
   params: {
-    name: rpCosmosDbName
-    location: location
-    zoneRedundant: determineZoneRedundancy(locationAvailabilityZoneList, rpCosmosZoneRedundantMode)
-    disableLocalAuth: disableLocalAuth
+    cosmosDBAccountName: rpCosmosDbName
     userAssignedMIs: [frontendMI, backendMI, adminApiMI]
-    private: rpCosmosDbPrivate
     resourceContainerMaxScale: resourceContainerMaxScale
     billingContainerMaxScale: billingContainerMaxScale
     locksContainerMaxScale: locksContainerMaxScale
@@ -774,13 +763,13 @@ module rpCosmosdbPrivateEndpoint '../modules/private-endpoint.bicep' = if (rpCos
     location: location
     subnetIds: [nodeSubnetCreation.outputs.subnetId]
     vnetId: vnetCreation.outputs.vnetId
-    privateLinkServiceId: rpCosmosDb.outputs.cosmosDBAccountId
+    privateLinkServiceId: rpCosmosDbAccountId
     serviceType: 'cosmosdb'
     groupId: 'Sql'
   }
 }
 
-output cosmosDBName string = deployFrontendCosmos ? rpCosmosDb.outputs.cosmosDBName : ''
+output cosmosDBName string = rpCosmosDbName
 output frontend_mi_client_id string = frontendMI.uamiClientID
 
 //
@@ -1171,7 +1160,7 @@ module svcClusterNSPProfile '../modules/network/nsp-profile.bicep' = {
     location: location
     associatedResources: [
       svcCluster.outputs.etcKeyVaultId
-      rpCosmosDb.outputs.cosmosDBAccountId
+      rpCosmosDbAccountId
     ]
     // TODO Add EV2 access here
     subscriptions: [

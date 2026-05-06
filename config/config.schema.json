@@ -1409,9 +1409,6 @@
         "cosmosDB": {
           "type": "object",
           "properties": {
-            "deploy": {
-              "type": "boolean"
-            },
             "disableLocalAuth": {
               "type": "boolean"
             },
@@ -1436,7 +1433,6 @@
           },
           "additionalProperties": false,
           "required": [
-            "deploy",
             "disableLocalAuth",
             "name",
             "private"

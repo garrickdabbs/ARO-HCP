@@ -717,7 +717,6 @@ defaults:
         limits:
           memory: unlimited
     cosmosDB:
-      deploy: true
       disableLocalAuth: true
       name: "arohcp{{ .ctx.environment }}-rp-{{ .ctx.regionShort }}" # [globally-unique]
       private: true

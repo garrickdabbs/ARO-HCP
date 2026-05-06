@@ -43,11 +43,9 @@ param aksClusterOutboundIPAddressIPTags = '{{ .svc.aks.clusterOutboundIPAddressI
 param aksNetworkDataplane = '{{ .svc.aks.networkDataplane }}'
 param aksNetworkPolicy = '{{ .svc.aks.networkDataplane }}'
 
-param disableLocalAuth = {{ .frontend.cosmosDB.disableLocalAuth }}
-param deployFrontendCosmos = {{ .frontend.cosmosDB.deploy }}
 param rpCosmosDbName = '{{ .frontend.cosmosDB.name }}'
 param rpCosmosDbPrivate = {{ .frontend.cosmosDB.private }}
-param rpCosmosZoneRedundantMode = '{{ .frontend.cosmosDB.zoneRedundantMode }}'
+param rpCosmosDbAccountId = '__rpCosmosDbAccountId__'
 param frontendMIName = '{{ .frontend.managedIdentityName }}'
 param frontendNamespace = '{{ .frontend.k8s.namespace }}'
 param frontendServiceAccountName = '{{ .frontend.k8s.serviceAccountName }}'
