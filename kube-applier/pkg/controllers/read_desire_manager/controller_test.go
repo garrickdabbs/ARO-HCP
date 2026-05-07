@@ -24,7 +24,6 @@ import (
 	"github.com/Azure/ARO-HCP/internal/api"
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
 	"github.com/Azure/ARO-HCP/internal/database/listertesting"
-
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )

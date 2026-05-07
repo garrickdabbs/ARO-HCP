@@ -126,7 +126,7 @@ func (s *kubernetesLoadStep) Run(ctx context.Context, t *testing.T, h *Harness) 
 			Resource: strings.ToLower(obj.GetKind()) + "s",
 		}
 		r := h.Dyn.Resource(gvr)
-		var ns string = obj.GetNamespace()
+		var ns = obj.GetNamespace()
 		if ns != "" {
 			_, err := r.Namespace(ns).Create(ctx, obj, metav1.CreateOptions{})
 			require.NoErrorf(t, err, "kubernetesLoad %s/%s", ns, obj.GetName())

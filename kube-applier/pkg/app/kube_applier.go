@@ -22,6 +22,8 @@ import (
 	"sync"
 	"time"
 
+	_ "k8s.io/component-base/metrics/prometheus/clientgo"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -31,13 +33,10 @@ import (
 	"k8s.io/client-go/tools/leaderelection"
 	"k8s.io/component-base/metrics/legacyregistry"
 
-	_ "k8s.io/component-base/metrics/prometheus/clientgo"
-
 	"github.com/Azure/ARO-HCP/internal/database/informers"
 	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/internal/version"
-
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/apply_desire"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/delete_desire"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/read_desire_manager"

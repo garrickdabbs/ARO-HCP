@@ -19,9 +19,7 @@ import (
 	"testing"
 	"time"
 
-	azcorearm "github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +27,8 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic/fake"
 	clienttesting "k8s.io/client-go/testing"
+
+	azcorearm "github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 
 	"github.com/Azure/ARO-HCP/internal/api"
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
@@ -41,87 +41,6 @@ func mustParseID(t *testing.T, s string) *azcorearm.ResourceID {
 		t.Fatalf("parse %q: %v", s, err)
 	}
 	return id
-}
-
-// staticMapper resolves a fixed list of GVRs to GVKs (the inverse of what
-// the apply controller's mapper does — DeleteDesire only knows the resource).
-type staticMapper struct {
-	resourceToKind map[schema.GroupVersionResource]schema.GroupVersionKind
-	scope          map[schema.GroupVersionKind]meta.RESTScopeName
-}
-
-func (m *staticMapper) KindsFor(input schema.GroupVersionResource) ([]schema.GroupVersionKind, error) {
-	// Match on Group + Resource, ignoring Version (real mappers behave the same way
-	// when the input has Version=="").
-	for gvr, gvk := range m.resourceToKind {
-		if gvr.Group == input.Group && gvr.Resource == input.Resource {
-			if input.Version == "" || gvr.Version == input.Version {
-				return []schema.GroupVersionKind{gvk}, nil
-			}
-		}
-	}
-	return nil, &meta.NoResourceMatchError{PartialResource: input}
-}
-
-func (m *staticMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*meta.RESTMapping, error) {
-	for gvr, gvk := range m.resourceToKind {
-		if gvk.GroupKind() != gk {
-			continue
-		}
-		scope := m.scope[gvk]
-		if scope == "" {
-			scope = meta.RESTScopeNameNamespace
-		}
-		return &meta.RESTMapping{
-			Resource:         gvr,
-			GroupVersionKind: gvk,
-			Scope:            restScope(scope),
-		}, nil
-	}
-	return nil, &meta.NoKindMatchError{GroupKind: gk}
-}
-
-func (m *staticMapper) RESTMappings(gk schema.GroupKind, versions ...string) ([]*meta.RESTMapping, error) {
-	rm, err := m.RESTMapping(gk, versions...)
-	if err != nil {
-		return nil, err
-	}
-	return []*meta.RESTMapping{rm}, nil
-}
-
-func (m *staticMapper) KindFor(input schema.GroupVersionResource) (schema.GroupVersionKind, error) {
-	gvks, err := m.KindsFor(input)
-	if err != nil {
-		return schema.GroupVersionKind{}, err
-	}
-	return gvks[0], nil
-}
-
-func (m *staticMapper) ResourceFor(input schema.GroupVersionResource) (schema.GroupVersionResource, error) {
-	return input, nil
-}
-
-func (m *staticMapper) ResourcesFor(input schema.GroupVersionResource) ([]schema.GroupVersionResource, error) {
-	return nil, nil
-}
-
-func (m *staticMapper) ResourceSingularizer(resource string) (string, error) {
-	return resource, nil
-}
-
-type namedScope struct{ n meta.RESTScopeName }
-
-func (s *namedScope) Name() meta.RESTScopeName { return s.n }
-
-func restScope(n meta.RESTScopeName) meta.RESTScope { return &namedScope{n: n} }
-
-func configMapMapper() *staticMapper {
-	cmGVR := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
-	cmGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
-	return &staticMapper{
-		resourceToKind: map[schema.GroupVersionResource]schema.GroupVersionKind{cmGVR: cmGVK},
-		scope:          map[schema.GroupVersionKind]meta.RESTScopeName{cmGVK: meta.RESTScopeNameNamespace},
-	}
 }
 
 func newDeleteDesire(t *testing.T, name string, target kubeapplier.ResourceReference) *kubeapplier.DeleteDesire {

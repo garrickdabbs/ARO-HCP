@@ -29,7 +29,6 @@ import (
 	"github.com/Azure/ARO-HCP/internal/signal"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/internal/version"
-
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/app"
 )
 

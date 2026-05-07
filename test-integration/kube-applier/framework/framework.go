@@ -50,7 +50,6 @@ import (
 	"github.com/Azure/ARO-HCP/internal/database/informers"
 	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/databasetesting"
-
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/apply_desire"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/delete_desire"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/read_desire_manager"

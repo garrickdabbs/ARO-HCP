@@ -32,6 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"k8s.io/client-go/rest"
+
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 
 	"github.com/Azure/ARO-HCP/test-integration/kube-applier/framework"
