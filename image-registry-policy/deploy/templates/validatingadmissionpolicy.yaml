@@ -16,12 +16,17 @@ spec:
   paramKind:
     apiVersion: v1
     kind: ConfigMap
-  matchConditions:
-  - name: 'excludeSystemNamespaces'
-    expression: "!(['kube-system', 'kube-node-lease', 'kube-public', 'gatekeeper-system'].exists(ns, request.namespace == ns))"
   matchConstraints:
     matchPolicy: Equivalent
-    namespaceSelector: {}
+    namespaceSelector:
+      matchExpressions:
+      - key: kubernetes.io/metadata.name
+        operator: NotIn
+        values:
+        - kube-system
+        - kube-node-lease
+        - kube-public
+        - gatekeeper-system
     objectSelector: {}
     resourceRules:
     - apiGroups: [""]
