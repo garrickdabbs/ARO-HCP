@@ -106,8 +106,7 @@ func (c *createNodePoolScopedMaestroReadonlyBundlesSyncer) SyncOnce(ctx context.
 	if err != nil {
 		return utils.TrackError(fmt.Errorf("failed to get NodePool: %w", err))
 	}
-	if len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
-		// TODO remove this once we have the information all in cosmos.
+	if existingNodePool.ServiceProviderProperties.ClusterServiceID == nil || len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
 		return nil
 	}
 

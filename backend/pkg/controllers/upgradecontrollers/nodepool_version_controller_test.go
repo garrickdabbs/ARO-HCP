@@ -121,8 +121,7 @@ func createTestNodePoolWithVersion(t *testing.T, ctx context.Context, mockResour
 		"/resourceGroups/" + testResourceGroupName +
 		"/providers/Microsoft.RedHatOpenShift/hcpOpenShiftClusters/" + testClusterName +
 		"/nodePools/" + testNodePoolName))
-	nodePoolInternalID, err := api.NewInternalID(testCSNodePoolIDStr)
-	require.NoError(t, err)
+	nodePoolInternalID := api.Ptr(api.Must(api.NewInternalID(testCSNodePoolIDStr)))
 
 	nodePool := &api.HCPOpenShiftClusterNodePool{
 		TrackedResource: arm.TrackedResource{
@@ -270,6 +269,35 @@ func TestNodePoolVersionSyncer_SyncOnce(t *testing.T) {
 			},
 			expectedError:         true,
 			expectedErrorContains: "cluster service unavailable",
+		},
+		{
+			name: "missing NodePool's ClusterServiceID returns nil",
+			seedDB: func(t *testing.T, ctx context.Context, mockDB *databasetesting.MockResourcesDBClient) {
+				t.Helper()
+				// SyncOnce only runs Cosmos NodePools.Get in this case
+				nodePoolResourceID := api.Must(azcorearm.ParseResourceID("/subscriptions/" + testSubscriptionID +
+					"/resourceGroups/" + testResourceGroupName +
+					"/providers/Microsoft.RedHatOpenShift/hcpOpenShiftClusters/" + testClusterName +
+					"/nodePools/" + testNodePoolName))
+				nodePool := &api.HCPOpenShiftClusterNodePool{
+					TrackedResource: arm.TrackedResource{
+						Resource: arm.Resource{
+							ID:   nodePoolResourceID,
+							Name: testNodePoolName,
+							Type: api.NodePoolResourceType.String(),
+						},
+						Location: "eastus",
+					},
+					ServiceProviderProperties: api.HCPOpenShiftClusterNodePoolServiceProviderProperties{},
+				}
+				_, err := mockDB.HCPClusters(testSubscriptionID, testResourceGroupName).
+					NodePools(testClusterName).Create(ctx, nodePool, nil)
+				require.NoError(t, err)
+			},
+			mockCS: func(t *testing.T, mockCS *ocm.MockClusterServiceClientSpec) {
+				t.Helper()
+			},
+			expectedError: false,
 		},
 		{
 			name: "missing version returns error",

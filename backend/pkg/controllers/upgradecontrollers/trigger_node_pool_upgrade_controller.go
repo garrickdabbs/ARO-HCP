@@ -86,6 +86,10 @@ func (c *triggerNodePoolUpgradeSyncer) SyncOnce(ctx context.Context, key control
 	if err != nil {
 		return utils.TrackError(fmt.Errorf("failed to get NodePool: %w", err))
 	}
+	// if we have no clusterservice nodepool, we have nothing to trigger.
+	if existingNodePool.ServiceProviderProperties.ClusterServiceID == nil || len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
+		return nil
+	}
 
 	existingServiceProviderNodePool, err := database.GetOrCreateServiceProviderNodePool(ctx, c.resourcesDBClient, key.GetResourceID())
 	if err != nil {
@@ -108,7 +112,7 @@ func (c *triggerNodePoolUpgradeSyncer) SyncOnce(ctx context.Context, key control
 		return nil
 	}
 
-	return c.createUpgradePolicyIfNeeded(ctx, desiredVersion, existingNodePool.ServiceProviderProperties.ClusterServiceID)
+	return c.createUpgradePolicyIfNeeded(ctx, desiredVersion, *existingNodePool.ServiceProviderProperties.ClusterServiceID)
 }
 
 // createUpgradePolicyIfNeeded ensures a node pool upgrade policy exists for the desired version.

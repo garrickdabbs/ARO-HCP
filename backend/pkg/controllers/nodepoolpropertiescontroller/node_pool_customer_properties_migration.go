@@ -74,7 +74,7 @@ func (c *nodePoolCustomerPropertiesMigrationController) CooldownChecker() contro
 func (c *nodePoolCustomerPropertiesMigrationController) NeedsWork(ctx context.Context, existingNodePool *api.HCPOpenShiftClusterNodePool) bool {
 	// Check if we have a Clusters Service's NodePool service ID to query. We will lack this information for newly created records when we
 	// transition to async Clusters Service's NodePool creation.
-	if len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
+	if existingNodePool.ServiceProviderProperties.ClusterServiceID == nil || len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
 		return false
 	}
 
@@ -120,7 +120,7 @@ func (c *nodePoolCustomerPropertiesMigrationController) SyncOnce(ctx context.Con
 	}
 
 	// Fetch the NodePool from Cluster Service
-	csNodePool, err := c.clusterServiceClient.GetNodePool(ctx, existingNodePool.ServiceProviderProperties.ClusterServiceID)
+	csNodePool, err := c.clusterServiceClient.GetNodePool(ctx, *existingNodePool.ServiceProviderProperties.ClusterServiceID)
 	if err != nil {
 		return utils.TrackError(fmt.Errorf("failed to get nodePool from Cluster Service: %w", err))
 	}

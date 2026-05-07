@@ -189,7 +189,7 @@ func (f *nodePoolTestFixture) newNodePool() *api.HCPOpenShiftClusterNodePool {
 			ProvisioningState: arm.ProvisioningStateAccepted,
 		},
 		ServiceProviderProperties: api.HCPOpenShiftClusterNodePoolServiceProviderProperties{
-			ClusterServiceID:  f.nodePoolInternalID,
+			ClusterServiceID:  &f.nodePoolInternalID,
 			ActiveOperationID: testOperationName,
 		},
 	}

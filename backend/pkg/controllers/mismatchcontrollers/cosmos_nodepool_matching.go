@@ -66,6 +66,12 @@ func (c *cosmosNodePoolMatching) getAllCosmosObjs(ctx context.Context, keyObj co
 	}
 
 	for _, nodePool := range allNodePools.Items(ctx) {
+		// we skip cosmos nodepools that don't have a clusterServiceID because if we don't have it there's nothing we
+		// can delete. It means that the nodepool hasn't been created in cluster service yet or we haven't persisted
+		// the clusterServiceID in cosmos yet.
+		if nodePool.ServiceProviderProperties.ClusterServiceID == nil || len(nodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
+			continue
+		}
 		ret = append(ret, nodePool)
 		existingCluster, exists := clusterServiceIDToNodePool[nodePool.ServiceProviderProperties.ClusterServiceID.String()]
 		if exists {

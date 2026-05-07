@@ -86,10 +86,10 @@ func (c *csStateDump) SyncOnce(ctx context.Context, key controllerutils.HCPClust
 		// No ClusterServiceID yet, cluster hasn't been registered with CS
 		return nil
 	}
-	csID := *cluster.ServiceProviderProperties.ClusterServiceID
+	csID := cluster.ServiceProviderProperties.ClusterServiceID
 
 	// Fetch cluster state from cluster-service
-	csCluster, err := c.csClient.GetCluster(ctx, csID)
+	csCluster, err := c.csClient.GetCluster(ctx, *csID)
 	if err != nil {
 		logger.Error(err, "failed to get cluster from cluster-service for CS state dump")
 		// Continue with what we have
@@ -119,12 +119,12 @@ func (c *csStateDump) SyncOnce(ctx context.Context, key controllerutils.HCPClust
 
 	for _, nodePool := range allNodePools.Items(ctx) {
 		npCSID := nodePool.ServiceProviderProperties.ClusterServiceID
-		if len(npCSID.String()) == 0 {
+		if npCSID == nil || len(npCSID.String()) == 0 {
 			// No ClusterServiceID yet, node pool hasn't been registered with CS
 			continue
 		}
 
-		csNodePool, err := c.csClient.GetNodePool(ctx, npCSID)
+		csNodePool, err := c.csClient.GetNodePool(ctx, *npCSID)
 		if err != nil {
 			logger.Error(err, "failed to get node pool from cluster-service for CS state dump",
 				"nodePoolClusterServiceID", npCSID.String(),

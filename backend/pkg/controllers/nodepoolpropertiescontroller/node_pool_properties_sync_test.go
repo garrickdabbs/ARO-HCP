@@ -122,16 +122,29 @@ func TestNodePoolPropertiesSyncer_SyncOnce(t *testing.T) {
 			expectGetNodePool: false,
 		},
 		{
-			name:            "no ClusterServiceID skips CS call",
+			name:            "nil ClusterServiceID skips CS call",
 			existingCluster: newTestCluster(t),
 			existingNodePool: newTestNodePool(t, func(np *api.HCPOpenShiftClusterNodePool) {
 				np.Properties.Version.ID = ""
-				np.ServiceProviderProperties.ClusterServiceID = api.InternalID{}
+				np.ServiceProviderProperties.ClusterServiceID = nil
 			}),
 			expectGetNodePool: false,
 			wantNodePool: newTestNodePool(t, func(np *api.HCPOpenShiftClusterNodePool) {
 				np.Properties.Version.ID = ""
-				np.ServiceProviderProperties.ClusterServiceID = api.InternalID{}
+				np.ServiceProviderProperties.ClusterServiceID = nil
+			}),
+		},
+		{
+			name:            "empty ClusterServiceID skips CS call",
+			existingCluster: newTestCluster(t),
+			existingNodePool: newTestNodePool(t, func(np *api.HCPOpenShiftClusterNodePool) {
+				np.Properties.Version.ID = ""
+				np.ServiceProviderProperties.ClusterServiceID = &api.InternalID{}
+			}),
+			expectGetNodePool: false,
+			wantNodePool: newTestNodePool(t, func(np *api.HCPOpenShiftClusterNodePool) {
+				np.Properties.Version.ID = ""
+				np.ServiceProviderProperties.ClusterServiceID = &api.InternalID{}
 			}),
 		},
 		{
@@ -290,7 +303,7 @@ func newTestNodePool(t *testing.T, opts func(*api.HCPOpenShiftClusterNodePool)) 
 			"/resourceGroups/" + testResourceGroupName +
 			"/providers/Microsoft.RedHatOpenShift/hcpOpenShiftClusters/" + testClusterName +
 			"/nodePools/" + testNodePoolName))
-	nodePoolInternalID := api.Must(api.NewInternalID(testNodePoolCSIDStr))
+	nodePoolInternalID := api.Ptr(api.Must(api.NewInternalID(testNodePoolCSIDStr)))
 	np := &api.HCPOpenShiftClusterNodePool{
 		TrackedResource: arm.TrackedResource{
 			Resource: arm.Resource{

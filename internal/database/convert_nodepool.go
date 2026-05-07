@@ -18,6 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/utils/ptr"
+
 	"github.com/Azure/ARO-HCP/internal/api"
 	"github.com/Azure/ARO-HCP/internal/api/arm"
 	"github.com/Azure/ARO-HCP/internal/ocm"
@@ -43,7 +45,7 @@ func InternalToCosmosNodePool(internalObj *api.HCPOpenShiftClusterNodePool) (*No
 			},
 			IntermediateResourceDoc: &ResourceDocument{
 				ResourceID:        internalObj.ID,
-				InternalID:        internalObj.ServiceProviderProperties.ClusterServiceID,
+				InternalID:        ptr.Deref(internalObj.ServiceProviderProperties.ClusterServiceID, api.InternalID{}),
 				ActiveOperationID: internalObj.ServiceProviderProperties.ActiveOperationID,
 				ProvisioningState: internalObj.Properties.ProvisioningState,
 				Identity:          toCosmosIdentity(internalObj.Identity),
@@ -65,7 +67,9 @@ func InternalToCosmosNodePool(internalObj *api.HCPOpenShiftClusterNodePool) (*No
 	cosmosObj.InternalState.InternalAPI.Properties.ProvisioningState = ""
 	cosmosObj.InternalState.InternalAPI.SystemData = nil
 	cosmosObj.InternalState.InternalAPI.Tags = nil
-	cosmosObj.InternalState.InternalAPI.ServiceProviderProperties.ClusterServiceID = ocm.InternalID{}
+	// we do this to keep serialization the same so that we can go to n-1 where this field isn't a pointer.
+	// on the reading side, we handle the pointer as expected.
+	cosmosObj.InternalState.InternalAPI.ServiceProviderProperties.ClusterServiceID = &ocm.InternalID{}
 	cosmosObj.InternalState.InternalAPI.ServiceProviderProperties.ActiveOperationID = ""
 
 	return cosmosObj, nil
@@ -103,7 +107,13 @@ func CosmosToInternalNodePool(cosmosObj *NodePool) (*api.HCPOpenShiftClusterNode
 	internalObj.SystemData = resourceDoc.SystemData
 	internalObj.Tags = copyTags(resourceDoc.Tags)
 	internalObj.ServiceProviderProperties.ExistingCosmosUID = cosmosObj.ID
-	internalObj.ServiceProviderProperties.ClusterServiceID = resourceDoc.InternalID
+	if len(resourceDoc.InternalID.String()) == 0 {
+		// preserve the nil on read
+		internalObj.ServiceProviderProperties.ClusterServiceID = nil
+	} else {
+		internalObj.ServiceProviderProperties.ClusterServiceID = &resourceDoc.InternalID
+	}
+
 	internalObj.ServiceProviderProperties.ActiveOperationID = resourceDoc.ActiveOperationID
 
 	internalObj.EnsureDefaults()

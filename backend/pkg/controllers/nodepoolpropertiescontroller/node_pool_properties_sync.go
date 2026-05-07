@@ -88,9 +88,10 @@ func (c *nodePoolPropertiesSyncer) SyncOnce(ctx context.Context, key controlleru
 	if err != nil {
 		return utils.TrackError(fmt.Errorf("failed to get node pool from cache: %w", err))
 	}
-	if len(cachedNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
+	if cachedNodePool.ServiceProviderProperties.ClusterServiceID == nil || len(cachedNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
 		return nil
 	}
+
 	needsVersionSync := c.needsVersionIDSync(cachedNodePool.Properties.Version.ID)
 	needsChannelSync := len(cachedNodePool.Properties.Version.ChannelGroup) == 0
 	if !needsVersionSync && !needsChannelSync {
@@ -105,16 +106,17 @@ func (c *nodePoolPropertiesSyncer) SyncOnce(ctx context.Context, key controlleru
 	if err != nil {
 		return utils.TrackError(fmt.Errorf("failed to get NodePool: %w", err))
 	}
-	if len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
+	if existingNodePool.ServiceProviderProperties.ClusterServiceID == nil || len(existingNodePool.ServiceProviderProperties.ClusterServiceID.String()) == 0 {
 		return nil
 	}
+
 	needsVersionSync = c.needsVersionIDSync(existingNodePool.Properties.Version.ID)
 	needsChannelSync = len(existingNodePool.Properties.Version.ChannelGroup) == 0
 	if !needsVersionSync && !needsChannelSync {
 		return nil
 	}
 
-	csNodePool, err := c.clusterServiceClient.GetNodePool(ctx, existingNodePool.ServiceProviderProperties.ClusterServiceID)
+	csNodePool, err := c.clusterServiceClient.GetNodePool(ctx, *existingNodePool.ServiceProviderProperties.ClusterServiceID)
 	if err != nil {
 		return utils.TrackError(fmt.Errorf("failed to get node pool from Cluster Service: %w", err))
 	}
