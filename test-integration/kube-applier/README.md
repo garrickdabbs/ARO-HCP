@@ -48,13 +48,21 @@ namespace will not collide with sibling tests.
 
 ## Running
 
-The tests skip cleanly when `KUBEBUILDER_ASSETS` is unset, so a workspace-wide
-`go test ./...` does not require envtest binaries.
-
-To run them:
+The simplest path is the repo's `make test-unit` target. It downloads the
+envtest binaries (etcd + kube-apiserver) into `./bin/envtest/` on first run
+and exports `KUBEBUILDER_ASSETS` for every test invocation in the workspace,
+including this package.
 
 ```bash
-go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.22
-export KUBEBUILDER_ASSETS=$(setup-envtest use 1.34 -p path)
+make test-unit
+```
+
+To run only this package once the binaries are downloaded:
+
+```bash
+export KUBEBUILDER_ASSETS=$(make -s envtest-setup)
 go test ./test-integration/kube-applier/...
 ```
+
+Running the tests directly with `go test` and no `KUBEBUILDER_ASSETS` is a
+hard error: TestMain prints setup instructions and exits non-zero.

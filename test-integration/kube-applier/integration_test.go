@@ -18,12 +18,14 @@
 // Cosmos KubeApplierClient. Each test is described by an artifact directory
 // under ./artifacts/. See ./framework for step types and conventions.
 //
-// The tests are skipped if KUBEBUILDER_ASSETS is unset; see the package
-// README for setup instructions.
+// KUBEBUILDER_ASSETS must point at the envtest binaries before running these
+// tests. The repo's top-level `make test-unit` target sets it automatically;
+// see the package README for the manual setup.
 package kube_applier_integration
 
 import (
 	"embed"
+	"fmt"
 	"os"
 	"testing"
 
@@ -43,12 +45,28 @@ var (
 	cfg     *rest.Config
 )
 
+const setupHelp = `KUBEBUILDER_ASSETS is not set. The kube-applier integration tests need
+envtest's kube-apiserver + etcd binaries.
+
+The simplest path is to run the repo target:
+
+    make test-unit
+
+That target downloads the envtest binaries into ./bin/envtest the first time
+and exports KUBEBUILDER_ASSETS for the test invocation. It is idempotent and
+safe to re-run.
+
+To set up the environment by hand for ad-hoc go test runs:
+
+    make envtest-setup
+    export KUBEBUILDER_ASSETS=$(make -s envtest-setup)
+    go test ./test-integration/kube-applier/...
+`
+
 func TestMain(m *testing.M) {
 	if os.Getenv("KUBEBUILDER_ASSETS") == "" {
-		// envtest binaries (etcd + kube-apiserver) are not installed in this
-		// environment. Skip the whole suite cleanly so a `go test ./...` run
-		// across the workspace doesn't fail.
-		os.Exit(0)
+		fmt.Fprint(os.Stderr, setupHelp)
+		os.Exit(1)
 	}
 
 	testEnv = &envtest.Environment{}
