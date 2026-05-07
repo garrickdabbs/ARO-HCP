@@ -78,7 +78,7 @@ func NewDeleteDesireController(
 		informer: informer,
 		fetcher:  fetcher,
 		dyn:      dyn,
-		writer: statuswriter.New[kubeapplier.DeleteDesire, keys.DeleteDesireKey](
+		writer: statuswriter.New[kubeapplier.DeleteDesire, keys.DeleteDesireKey, *kubeapplier.DeleteDesire](
 			fetcher,
 			&deleteDesireReplacer{crudByParent: crudByParent},
 		),
@@ -291,8 +291,6 @@ func classifyAsDegraded(err error) error {
 }
 
 // deleteDesireFetcher implements statuswriter.Fetcher over a DeleteDesireLister.
-// Returns a DeepCopy so the StatusWriter can safely mutate it; see the
-// apply_desire counterpart for why aliasing the cache would be a bug.
 type deleteDesireFetcher struct {
 	lister listers.DeleteDesireLister
 }
@@ -300,17 +298,10 @@ type deleteDesireFetcher struct {
 var _ statuswriter.Fetcher[kubeapplier.DeleteDesire, keys.DeleteDesireKey] = &deleteDesireFetcher{}
 
 func (f *deleteDesireFetcher) Fetch(ctx context.Context, key keys.DeleteDesireKey) (*kubeapplier.DeleteDesire, error) {
-	var got *kubeapplier.DeleteDesire
-	var err error
 	if key.IsNodePoolScoped() {
-		got, err = f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
-	} else {
-		got, err = f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
 	}
-	if err != nil {
-		return nil, err
-	}
-	return got.DeepCopy(), nil
+	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
 }
 
 // deleteDesireReplacer implements statuswriter.Replacer over a

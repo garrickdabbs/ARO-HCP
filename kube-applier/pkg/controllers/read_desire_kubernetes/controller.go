@@ -121,7 +121,7 @@ func NewReadDesireKubernetesController(
 				Name: fmt.Sprintf("ReadDesireKubernetesController/%s/%s/%s", key.ClusterName, key.NodePoolName, key.Name),
 			},
 		),
-		writer: statuswriter.New[kubeapplier.ReadDesire, keys.ReadDesireKey](
+		writer: statuswriter.New[kubeapplier.ReadDesire, keys.ReadDesireKey, *kubeapplier.ReadDesire](
 			fetcher,
 			&readDesireReplacer{crudByParent: crudByParent},
 		),
@@ -311,8 +311,6 @@ func (c *ReadDesireKubernetesController) singleObjectListWatch() *cache.ListWatc
 }
 
 // readDesireFetcher implements statuswriter.Fetcher over a ReadDesireLister.
-// Returns a DeepCopy so the StatusWriter can safely mutate it; see the
-// apply_desire counterpart for why aliasing the cache would be a bug.
 type readDesireFetcher struct {
 	lister listers.ReadDesireLister
 }
@@ -320,17 +318,10 @@ type readDesireFetcher struct {
 var _ statuswriter.Fetcher[kubeapplier.ReadDesire, keys.ReadDesireKey] = &readDesireFetcher{}
 
 func (f *readDesireFetcher) Fetch(ctx context.Context, key keys.ReadDesireKey) (*kubeapplier.ReadDesire, error) {
-	var got *kubeapplier.ReadDesire
-	var err error
 	if key.IsNodePoolScoped() {
-		got, err = f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
-	} else {
-		got, err = f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
 	}
-	if err != nil {
-		return nil, err
-	}
-	return got.DeepCopy(), nil
+	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
 }
 
 // readDesireReplacer implements statuswriter.Replacer over a

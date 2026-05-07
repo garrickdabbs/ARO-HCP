@@ -81,7 +81,7 @@ func NewApplyDesireController(
 		informer: informer,
 		fetcher:  fetcher,
 		dyn:      dyn,
-		writer: statuswriter.New[kubeapplier.ApplyDesire, keys.ApplyDesireKey](
+		writer: statuswriter.New[kubeapplier.ApplyDesire, keys.ApplyDesireKey, *kubeapplier.ApplyDesire](
 			fetcher,
 			&applyDesireReplacer{crudByParent: crudByParent},
 		),
@@ -248,11 +248,6 @@ func isClientError(err error) bool {
 
 // applyDesireFetcher implements statuswriter.Fetcher over an ApplyDesireLister,
 // dispatching to the correct scope-specific lister method based on the key.
-//
-// The result is deep-copied before return so callers (in particular the
-// StatusWriter) can mutate the returned object — including via helpers like
-// meta.SetStatusCondition that edit conditions in place — without aliasing
-// state in the informer cache.
 type applyDesireFetcher struct {
 	lister listers.ApplyDesireLister
 }
@@ -260,17 +255,10 @@ type applyDesireFetcher struct {
 var _ statuswriter.Fetcher[kubeapplier.ApplyDesire, keys.ApplyDesireKey] = &applyDesireFetcher{}
 
 func (f *applyDesireFetcher) Fetch(ctx context.Context, key keys.ApplyDesireKey) (*kubeapplier.ApplyDesire, error) {
-	var got *kubeapplier.ApplyDesire
-	var err error
 	if key.IsNodePoolScoped() {
-		got, err = f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
-	} else {
-		got, err = f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
 	}
-	if err != nil {
-		return nil, err
-	}
-	return got.DeepCopy(), nil
+	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
 }
 
 // applyDesireReplacer implements statuswriter.Replacer over a

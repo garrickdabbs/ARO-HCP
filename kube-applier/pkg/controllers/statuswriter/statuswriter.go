@@ -31,13 +31,9 @@ import (
 )
 
 // Fetcher reads the current state of a single desire by a controller-defined
-// typed key. Implementations typically wrap a lister cache.
-//
-// Implementations MUST return a copy that the caller can mutate safely.
-// Returning a pointer into a shared informer cache is incorrect: the
-// StatusWriter mutates conditions in place via meta.SetStatusCondition,
-// which would corrupt the cache entry and silently defeat the
-// "no-op when unchanged" check below.
+// typed key. Implementations typically wrap a lister cache. The StatusWriter
+// deep-copies whatever Fetcher returns before mutating, so returning the
+// cache pointer directly is fine.
 type Fetcher[T any, K comparable] interface {
 	Fetch(ctx context.Context, key K) (*T, error)
 }
@@ -48,6 +44,15 @@ type Fetcher[T any, K comparable] interface {
 // StatusWriter does not pass a key here.
 type Replacer[T any] interface {
 	Replace(ctx context.Context, desired *T) error
+}
+
+// DeepCopyable is the constraint on the pointer-type parameter that lets the
+// StatusWriter clone the value it receives from the Fetcher without knowing
+// T's concrete shape. The kubeapplier *Desire types satisfy it via the
+// generated zz_generated.deepcopy.go.
+type DeepCopyable[T any] interface {
+	*T
+	DeepCopy() *T
 }
 
 // MutateFunc deep-mutates a desire to record the latest controller observation.
@@ -62,11 +67,17 @@ type StatusWriter[T any, K comparable] interface {
 }
 
 // New returns a StatusWriter that fetches via fetcher and writes via replacer.
-func New[T any, K comparable](fetcher Fetcher[T, K], replacer Replacer[T]) StatusWriter[T, K] {
-	return &writer[T, K]{fetcher: fetcher, replacer: replacer}
+// The third type parameter is the pointer type *T; it carries the DeepCopy
+// method the StatusWriter needs to clone the existing desire before mutating
+// it. Callers spell it out at the call site so we do not need a separate
+// "Cloner" parameter.
+func New[T any, K comparable, PT DeepCopyable[T]](
+	fetcher Fetcher[T, K], replacer Replacer[T],
+) StatusWriter[T, K] {
+	return &writer[T, K, PT]{fetcher: fetcher, replacer: replacer}
 }
 
-type writer[T any, K comparable] struct {
+type writer[T any, K comparable, PT DeepCopyable[T]] struct {
 	fetcher  Fetcher[T, K]
 	replacer Replacer[T]
 }
@@ -81,12 +92,11 @@ type writer[T any, K comparable] struct {
 //     WatchStarted vs. per-instance Successful/KubeContent); on conflict the
 //     loser must retry.
 //
-// We Fetch twice to obtain two independent deep-copies of the desire: one to
-// mutate (desired) and one to compare against (existing). A naive
+// We DeepCopy the fetched desire before applying mutate. A naive
 // `desired := *existing` would share the conditions-slice backing array with
 // existing, and meta.SetStatusCondition mutates conditions in place, so the
 // comparison would always report no change and silently drop writes.
-func (w *writer[T, K]) UpdateStatus(ctx context.Context, key K, mutate MutateFunc[T]) error {
+func (w *writer[T, K, PT]) UpdateStatus(ctx context.Context, key K, mutate MutateFunc[T]) error {
 	existing, err := w.fetcher.Fetch(ctx, key)
 	if err != nil {
 		// NotFound is normal: the desire was deleted between dispatch and now.
@@ -99,17 +109,7 @@ func (w *writer[T, K]) UpdateStatus(ctx context.Context, key K, mutate MutateFun
 		return nil
 	}
 
-	desired, err := w.fetcher.Fetch(ctx, key)
-	if err != nil {
-		if database.IsNotFoundError(err) {
-			return nil
-		}
-		return fmt.Errorf("fetch %v: %w", key, err)
-	}
-	if desired == nil {
-		return nil
-	}
-
+	desired := PT(existing).DeepCopy()
 	mutate(desired)
 
 	if equality.Semantic.DeepEqual(existing, desired) {
