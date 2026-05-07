@@ -1,9 +1,9 @@
 {
-  "status": {
-    "kubeContent": {
-      "data": {
-        "version": "2"
-      }
-    }
-  }
+	"status": {
+		"kubeContent": {
+			"data": {
+				"version": "2"
+			}
+		}
+	}
 }

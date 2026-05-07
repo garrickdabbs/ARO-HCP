@@ -1,10 +1,10 @@
 {
-  "status": {
-    "conditions": [
-      {
-        "type": "Successful",
-        "status": "True"
-      }
-    ]
-  }
+	"status": {
+		"conditions": [
+			{
+				"status": "True",
+				"type": "Successful"
+			}
+		]
+	}
 }

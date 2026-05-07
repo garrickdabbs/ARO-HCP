@@ -1,10 +1,10 @@
 {
-  "kind": "ConfigMap",
-  "metadata": {
-    "name": "hello",
-    "namespace": "apply-creates-configmap"
-  },
-  "data": {
-    "key": "value"
-  }
+	"data": {
+		"key": "value"
+	},
+	"kind": "ConfigMap",
+	"metadata": {
+		"name": "hello",
+		"namespace": "apply-creates-configmap"
+	}
 }
