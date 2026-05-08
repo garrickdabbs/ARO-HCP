@@ -26,7 +26,7 @@ func TestTimeBasedCooldownChecker_RepeatedFalseDoesNotPreventTrue(t *testing.T) 
 	startTime := time.Now()
 	fakeClock := clocktesting.NewFakePassiveClock(startTime)
 	checker := NewTimeBasedCooldownChecker(5 * time.Second)
-	checker.clock = fakeClock
+	checker.SetClock(fakeClock)
 
 	ctx := context.Background()
 	key := "test-key"

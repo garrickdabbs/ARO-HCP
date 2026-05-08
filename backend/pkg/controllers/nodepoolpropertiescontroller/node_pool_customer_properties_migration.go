@@ -23,6 +23,7 @@ import (
 	"github.com/Azure/ARO-HCP/backend/pkg/informers"
 	"github.com/Azure/ARO-HCP/backend/pkg/listers"
 	"github.com/Azure/ARO-HCP/internal/api"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/ocm"
 	"github.com/Azure/ARO-HCP/internal/utils"
@@ -32,7 +33,7 @@ import (
 // from cluster-service to cosmos DB. It uses the .platform.vmSize attribute to know that customerProperties are missing.
 // Old records will lack those fields and once we read from cluster-service, we'll have the information we need.
 type nodePoolCustomerPropertiesMigrationController struct {
-	cooldownChecker controllerutils.CooldownChecker
+	cooldownChecker controllerutil.CooldownChecker
 
 	nodePoolLister       listers.NodePoolLister
 	resourcesDBClient    database.ResourcesDBClient
@@ -67,7 +68,7 @@ func NewNodePoolCustomerPropertiesMigrationController(
 	return controller
 }
 
-func (c *nodePoolCustomerPropertiesMigrationController) CooldownChecker() controllerutils.CooldownChecker {
+func (c *nodePoolCustomerPropertiesMigrationController) CooldownChecker() controllerutil.CooldownChecker {
 	return c.cooldownChecker
 }
 

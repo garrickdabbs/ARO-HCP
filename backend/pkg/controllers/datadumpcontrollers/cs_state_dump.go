@@ -27,18 +27,19 @@ import (
 	"github.com/Azure/ARO-HCP/backend/pkg/controllers/controllerutils"
 	"github.com/Azure/ARO-HCP/backend/pkg/informers"
 	"github.com/Azure/ARO-HCP/backend/pkg/listers"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/ocm"
 	"github.com/Azure/ARO-HCP/internal/utils"
 )
 
 type csStateDump struct {
-	cooldownChecker   controllerutils.CooldownChecker
+	cooldownChecker   controllerutil.CooldownChecker
 	resourcesDBClient database.ResourcesDBClient
 	csClient          ocm.ClusterServiceClientSpec
 
 	// nextDumpChecker ensures we don't hotloop from any source.
-	nextDumpChecker controllerutils.CooldownChecker
+	nextDumpChecker controllerutil.CooldownChecker
 }
 
 // NewCSStateDumpController periodically fetches cluster-service state for each cluster and dumps it to logs.
@@ -156,7 +157,7 @@ func (c *csStateDump) SyncOnce(ctx context.Context, key controllerutils.HCPClust
 	return nil
 }
 
-func (c *csStateDump) CooldownChecker() controllerutils.CooldownChecker {
+func (c *csStateDump) CooldownChecker() controllerutil.CooldownChecker {
 	return c.cooldownChecker
 }
 

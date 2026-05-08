@@ -32,6 +32,7 @@ import (
 	"github.com/Azure/ARO-HCP/backend/pkg/listers"
 	"github.com/Azure/ARO-HCP/backend/pkg/maestro"
 	"github.com/Azure/ARO-HCP/internal/api"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/ocm"
 	"github.com/Azure/ARO-HCP/internal/utils"
@@ -51,7 +52,7 @@ const (
 // As of now we support the creation of a Maestro readonly bundle for the Hypershift's HostedCluster CR associated to
 // the Cluster.
 type createClusterScopedMaestroReadonlyBundlesSyncer struct {
-	cooldownChecker controllerutils.CooldownChecker
+	cooldownChecker controllerutil.CooldownChecker
 
 	activeOperationLister listers.ActiveOperationLister
 
@@ -344,6 +345,6 @@ func (c *createClusterScopedMaestroReadonlyBundlesSyncer) getHostedClusterNamesp
 	return fmt.Sprintf("ocm-%s-%s", envName, csClusterID)
 }
 
-func (c *createClusterScopedMaestroReadonlyBundlesSyncer) CooldownChecker() controllerutils.CooldownChecker {
+func (c *createClusterScopedMaestroReadonlyBundlesSyncer) CooldownChecker() controllerutil.CooldownChecker {
 	return c.cooldownChecker
 }

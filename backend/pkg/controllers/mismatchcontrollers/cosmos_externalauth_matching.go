@@ -24,13 +24,14 @@ import (
 	"github.com/Azure/ARO-HCP/backend/pkg/controllers/controllerutils"
 	"github.com/Azure/ARO-HCP/backend/pkg/informers"
 	"github.com/Azure/ARO-HCP/internal/api"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/ocm"
 	"github.com/Azure/ARO-HCP/internal/utils"
 )
 
 type cosmosExternalAuthMatching struct {
-	cooldownChecker      controllerutils.CooldownChecker
+	cooldownChecker      controllerutil.CooldownChecker
 	resourcesDBClient    database.ResourcesDBClient
 	clusterServiceClient ocm.ClusterServiceClientSpec
 }
@@ -38,7 +39,7 @@ type cosmosExternalAuthMatching struct {
 // NewCosmosExternalAuthMatchingController periodically looks for mismatched cluster-service and cosmos externalauths
 func NewCosmosExternalAuthMatchingController(resourcesDBClient database.ResourcesDBClient, clusterServiceClient ocm.ClusterServiceClientSpec, informers informers.BackendInformers) controllerutils.Controller {
 	syncer := &cosmosExternalAuthMatching{
-		cooldownChecker:      controllerutils.NewTimeBasedCooldownChecker(1 * time.Hour),
+		cooldownChecker:      controllerutil.NewTimeBasedCooldownChecker(1 * time.Hour),
 		resourcesDBClient:    resourcesDBClient,
 		clusterServiceClient: clusterServiceClient,
 	}
@@ -164,6 +165,6 @@ func (c *cosmosExternalAuthMatching) SyncOnce(ctx context.Context, keyObj contro
 	return utils.TrackError(syncErr)
 }
 
-func (c *cosmosExternalAuthMatching) CooldownChecker() controllerutils.CooldownChecker {
+func (c *cosmosExternalAuthMatching) CooldownChecker() controllerutil.CooldownChecker {
 	return c.cooldownChecker
 }

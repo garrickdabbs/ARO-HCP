@@ -32,6 +32,7 @@ import (
 	"github.com/Azure/ARO-HCP/backend/pkg/listers"
 	"github.com/Azure/ARO-HCP/backend/pkg/maestro"
 	"github.com/Azure/ARO-HCP/internal/api"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/ocm"
 	"github.com/Azure/ARO-HCP/internal/utils"
@@ -51,7 +52,7 @@ const (
 // As of now we support the creation of a Maestro readonly bundle for the Hypershift's NodePool CRs associated to
 // the Cluster.
 type createNodePoolScopedMaestroReadonlyBundlesSyncer struct {
-	cooldownChecker controllerutils.CooldownChecker
+	cooldownChecker controllerutil.CooldownChecker
 
 	activeOperationLister listers.ActiveOperationLister
 
@@ -357,6 +358,6 @@ func (c *createNodePoolScopedMaestroReadonlyBundlesSyncer) getNodePoolName(csClu
 	return fmt.Sprintf("%s-%s", csClusterDomainPrefix, csNodePoolID)
 }
 
-func (c *createNodePoolScopedMaestroReadonlyBundlesSyncer) CooldownChecker() controllerutils.CooldownChecker {
+func (c *createNodePoolScopedMaestroReadonlyBundlesSyncer) CooldownChecker() controllerutil.CooldownChecker {
 	return c.cooldownChecker
 }
