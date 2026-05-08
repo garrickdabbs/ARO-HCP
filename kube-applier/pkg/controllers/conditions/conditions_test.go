@@ -37,30 +37,30 @@ func findCondition(conds []metav1.Condition, condType string) *metav1.Condition 
 func TestSetSuccessful_NilErrIsTrueWithNoErrors(t *testing.T) {
 	var conds []metav1.Condition
 	SetSuccessful(&conds, nil)
-	c := findCondition(conds, kubeapplier.ConditionSuccessful)
+	c := findCondition(conds, kubeapplier.ConditionTypeSuccessful)
 	if c == nil {
 		t.Fatal("Successful condition not set")
 	}
 	if c.Status != metav1.ConditionTrue {
 		t.Errorf("Status = %v, want True", c.Status)
 	}
-	if c.Reason != kubeapplier.ReasonNoErrors {
-		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ReasonNoErrors)
+	if c.Reason != kubeapplier.ConditionReasonNoErrors {
+		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ConditionReasonNoErrors)
 	}
 }
 
 func TestSetSuccessful_PreCheckErrorReason(t *testing.T) {
 	var conds []metav1.Condition
 	SetSuccessful(&conds, NewPreCheckError(errors.New("malformed input")))
-	c := findCondition(conds, kubeapplier.ConditionSuccessful)
+	c := findCondition(conds, kubeapplier.ConditionTypeSuccessful)
 	if c == nil {
 		t.Fatal("Successful condition not set")
 	}
 	if c.Status != metav1.ConditionFalse {
 		t.Errorf("Status = %v, want False", c.Status)
 	}
-	if c.Reason != kubeapplier.ReasonPreCheckFailed {
-		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ReasonPreCheckFailed)
+	if c.Reason != kubeapplier.ConditionReasonPreCheckFailed {
+		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ConditionReasonPreCheckFailed)
 	}
 	if c.Message != "malformed input" {
 		t.Errorf("Message = %q, want %q", c.Message, "malformed input")
@@ -70,12 +70,12 @@ func TestSetSuccessful_PreCheckErrorReason(t *testing.T) {
 func TestSetSuccessful_RegularErrorIsKubeAPIError(t *testing.T) {
 	var conds []metav1.Condition
 	SetSuccessful(&conds, errors.New("503 from apiserver"))
-	c := findCondition(conds, kubeapplier.ConditionSuccessful)
+	c := findCondition(conds, kubeapplier.ConditionTypeSuccessful)
 	if c == nil {
 		t.Fatal("Successful condition not set")
 	}
-	if c.Reason != kubeapplier.ReasonKubeAPIError {
-		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ReasonKubeAPIError)
+	if c.Reason != kubeapplier.ConditionReasonKubeAPIError {
+		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ConditionReasonKubeAPIError)
 	}
 }
 
@@ -84,15 +84,15 @@ func TestSetSuccessfulWaitingForDeletion(t *testing.T) {
 	dt := metav1.NewTime(time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC))
 	uid := types.UID("abc-123")
 	SetSuccessfulWaitingForDeletion(&conds, dt, uid)
-	c := findCondition(conds, kubeapplier.ConditionSuccessful)
+	c := findCondition(conds, kubeapplier.ConditionTypeSuccessful)
 	if c == nil {
 		t.Fatal("Successful condition not set")
 	}
 	if c.Status != metav1.ConditionFalse {
 		t.Errorf("Status = %v, want False", c.Status)
 	}
-	if c.Reason != kubeapplier.ReasonWaitingForDeletion {
-		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ReasonWaitingForDeletion)
+	if c.Reason != kubeapplier.ConditionReasonWaitingForDeletion {
+		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ConditionReasonWaitingForDeletion)
 	}
 	if !contains(c.Message, "abc-123") {
 		t.Errorf("Message = %q does not contain UID", c.Message)
@@ -105,7 +105,7 @@ func TestSetSuccessfulWaitingForDeletion(t *testing.T) {
 func TestSetWatchStarted_AlwaysBumpsLastTransition(t *testing.T) {
 	var conds []metav1.Condition
 	SetWatchStarted(&conds, "first launch")
-	first := findCondition(conds, kubeapplier.ConditionWatchStarted)
+	first := findCondition(conds, kubeapplier.ConditionTypeWatchStarted)
 	if first == nil {
 		t.Fatal("WatchStarted not set")
 	}
@@ -113,7 +113,7 @@ func TestSetWatchStarted_AlwaysBumpsLastTransition(t *testing.T) {
 	// Wait a tick so the second timestamp must differ.
 	time.Sleep(2 * time.Millisecond)
 	SetWatchStarted(&conds, "second launch")
-	second := findCondition(conds, kubeapplier.ConditionWatchStarted)
+	second := findCondition(conds, kubeapplier.ConditionTypeWatchStarted)
 	if second == nil {
 		t.Fatal("WatchStarted gone after second call")
 	}
@@ -126,7 +126,7 @@ func TestSetWatchStarted_AlwaysBumpsLastTransition(t *testing.T) {
 	// And there's still only one entry.
 	count := 0
 	for _, c := range conds {
-		if c.Type == kubeapplier.ConditionWatchStarted {
+		if c.Type == kubeapplier.ConditionTypeWatchStarted {
 			count++
 		}
 	}
@@ -138,18 +138,18 @@ func TestSetWatchStarted_AlwaysBumpsLastTransition(t *testing.T) {
 func TestSetDegraded(t *testing.T) {
 	var conds []metav1.Condition
 	SetDegraded(&conds, errors.New("control loop wedged"))
-	c := findCondition(conds, kubeapplier.ConditionDegraded)
+	c := findCondition(conds, kubeapplier.ConditionTypeDegraded)
 	if c == nil {
 		t.Fatal("Degraded not set")
 	}
 	if c.Status != metav1.ConditionTrue {
 		t.Errorf("Status = %v, want True", c.Status)
 	}
-	if c.Reason != kubeapplier.ReasonFailed {
-		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ReasonFailed)
+	if c.Reason != kubeapplier.ConditionReasonFailed {
+		t.Errorf("Reason = %q, want %q", c.Reason, kubeapplier.ConditionReasonFailed)
 	}
 	SetDegraded(&conds, nil)
-	c = findCondition(conds, kubeapplier.ConditionDegraded)
+	c = findCondition(conds, kubeapplier.ConditionTypeDegraded)
 	if c.Status != metav1.ConditionFalse {
 		t.Errorf("Status = %v after recovery, want False", c.Status)
 	}

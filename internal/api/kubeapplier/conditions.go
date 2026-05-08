@@ -16,43 +16,43 @@ package kubeapplier
 
 // Condition types reported on every *Desire's .status.conditions.
 const (
-	// ConditionSuccessful is true when the controller most-recently observed the
+	// ConditionTypeSuccessful is true when the controller most-recently observed the
 	// desired effect of the *Desire achieved against the kube-apiserver.
-	ConditionSuccessful = "Successful"
+	ConditionTypeSuccessful = "Successful"
 
-	// ConditionDegraded reports controller-level health for the *Desire.
+	// ConditionTypeDegraded reports controller-level health for the *Desire.
 	// True means the controller failed in a way unrelated to the kube-apiserver
 	// rejecting our request.
-	ConditionDegraded = "Degraded"
+	ConditionTypeDegraded = "Degraded"
 
-	// ConditionWatchStarted reports that the per-instance ReadDesire informer
+	// ConditionTypeWatchStarted reports that the per-instance ReadDesire informer
 	// has been launched. Only meaningful on ReadDesire.
-	ConditionWatchStarted = "WatchStarted"
+	ConditionTypeWatchStarted = "WatchStarted"
 )
 
 // Condition reasons.
 const (
-	// ReasonKubeAPIError is set when the kube-apiserver returned an error for our request.
-	ReasonKubeAPIError = "KubeAPIError"
+	// ConditionReasonKubeAPIError is set when the kube-apiserver returned an error for our request.
+	ConditionReasonKubeAPIError = "KubeAPIError"
 
-	// ReasonPreCheckFailed is set when we could not issue the kube-apiserver request
+	// ConditionReasonPreCheckFailed is set when we could not issue the kube-apiserver request
 	// (e.g. malformed kubeContent, GVR not present in the RESTMapper, etc.).
-	ReasonPreCheckFailed = "PreCheckFailed"
+	ConditionReasonPreCheckFailed = "PreCheckFailed"
 
-	// ReasonWaitingForDeletion is set on a DeleteDesire when the target item still
+	// ConditionReasonWaitingForDeletion is set on a DeleteDesire when the target item still
 	// exists in the cluster, either because finalizers are running or the delete
 	// call has just been issued.
-	ReasonWaitingForDeletion = "WaitingForDeletion"
+	ConditionReasonWaitingForDeletion = "WaitingForDeletion"
 
-	// ReasonLaunched is set on ConditionWatchStarted when the per-instance
+	// ConditionReasonLaunched is set on ConditionTypeWatchStarted when the per-instance
 	// ReadDesire informer is started.
-	ReasonLaunched = "Launched"
+	ConditionReasonLaunched = "Launched"
 
-	// ReasonNoErrors is the success reason matching the existing controller
+	// ConditionReasonNoErrors is the success reason matching the existing controller
 	// convention (see backend's controllerutils.ReportSyncError).
-	ReasonNoErrors = "NoErrors"
+	ConditionReasonNoErrors = "NoErrors"
 
-	// ReasonFailed is the failure reason matching the existing controller
+	// ConditionReasonFailed is the failure reason matching the existing controller
 	// convention (see backend's controllerutils.ReportSyncError).
-	ReasonFailed = "Failed"
+	ConditionReasonFailed = "Failed"
 )

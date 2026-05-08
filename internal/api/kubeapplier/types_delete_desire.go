@@ -20,7 +20,14 @@ import (
 	"github.com/Azure/ARO-HCP/internal/api"
 )
 
-// DeleteDesire indicates a kube item in .spec.targetItem to issue a delete for.
+// DeleteDesire targets a single Kubernetes object on the management cluster
+// for deletion. Each DeleteDesire targets exactly one kube object — there
+// is no list form.
+//
+// Deleting a DeleteDesire from Cosmos has no effect on the kube object that
+// was (or was not) deleted. Removing the desire only stops further
+// reconciliation; the underlying kube state is unchanged.
+//
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type DeleteDesire struct {
 	// CosmosMetadata.ResourceID is nested under an HCPOpenShiftCluster (and

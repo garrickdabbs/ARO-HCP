@@ -47,7 +47,7 @@ func fixtureApplyDesire(t *testing.T) *ApplyDesire {
 		},
 		Status: ApplyDesireStatus{
 			Conditions: []metav1.Condition{
-				{Type: ConditionSuccessful, Status: metav1.ConditionTrue, Reason: ReasonNoErrors, Message: "ok"},
+				{Type: ConditionTypeSuccessful, Status: metav1.ConditionTrue, Reason: ConditionReasonNoErrors, Message: "ok"},
 			},
 		},
 	}
@@ -71,7 +71,7 @@ func fixtureDeleteDesire(t *testing.T) *DeleteDesire {
 		},
 		Status: DeleteDesireStatus{
 			Conditions: []metav1.Condition{
-				{Type: ConditionSuccessful, Status: metav1.ConditionFalse, Reason: ReasonWaitingForDeletion, Message: "uid=abc"},
+				{Type: ConditionTypeSuccessful, Status: metav1.ConditionFalse, Reason: ConditionReasonWaitingForDeletion, Message: "uid=abc"},
 			},
 		},
 	}
@@ -95,8 +95,8 @@ func fixtureReadDesire(t *testing.T) *ReadDesire {
 		},
 		Status: ReadDesireStatus{
 			Conditions: []metav1.Condition{
-				{Type: ConditionSuccessful, Status: metav1.ConditionTrue, Reason: ReasonNoErrors},
-				{Type: ConditionWatchStarted, Status: metav1.ConditionTrue, Reason: ReasonLaunched, Message: "watcher up"},
+				{Type: ConditionTypeSuccessful, Status: metav1.ConditionTrue, Reason: ConditionReasonNoErrors},
+				{Type: ConditionTypeWatchStarted, Status: metav1.ConditionTrue, Reason: ConditionReasonLaunched, Message: "watcher up"},
 			},
 			KubeContent: runtime.RawExtension{Raw: []byte(`{"apiVersion":"v1","kind":"ConfigMap"}`)},
 		},

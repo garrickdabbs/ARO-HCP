@@ -37,29 +37,17 @@ func nestedResourceType(parts ...string) azcorearm.ResourceType {
 
 var (
 	// ClusterScopedApplyDesireResourceType is applyDesires nested directly under a Cluster.
-	ClusterScopedApplyDesireResourceType = nestedResourceType(
-		api.ClusterResourceTypeName, ApplyDesireResourceTypeName,
-	)
+	ClusterScopedApplyDesireResourceType = nestedResourceType(api.ClusterResourceTypeName, ApplyDesireResourceTypeName)
 	// NodePoolScopedApplyDesireResourceType is applyDesires nested under a NodePool under a Cluster.
-	NodePoolScopedApplyDesireResourceType = nestedResourceType(
-		api.ClusterResourceTypeName, api.NodePoolResourceTypeName, ApplyDesireResourceTypeName,
-	)
+	NodePoolScopedApplyDesireResourceType = nestedResourceType(api.ClusterResourceTypeName, api.NodePoolResourceTypeName, ApplyDesireResourceTypeName)
 
 	// ClusterScopedDeleteDesireResourceType is deleteDesires nested directly under a Cluster.
-	ClusterScopedDeleteDesireResourceType = nestedResourceType(
-		api.ClusterResourceTypeName, DeleteDesireResourceTypeName,
-	)
+	ClusterScopedDeleteDesireResourceType = nestedResourceType(api.ClusterResourceTypeName, DeleteDesireResourceTypeName)
 	// NodePoolScopedDeleteDesireResourceType is deleteDesires nested under a NodePool under a Cluster.
-	NodePoolScopedDeleteDesireResourceType = nestedResourceType(
-		api.ClusterResourceTypeName, api.NodePoolResourceTypeName, DeleteDesireResourceTypeName,
-	)
+	NodePoolScopedDeleteDesireResourceType = nestedResourceType(api.ClusterResourceTypeName, api.NodePoolResourceTypeName, DeleteDesireResourceTypeName)
 
 	// ClusterScopedReadDesireResourceType is readDesires nested directly under a Cluster.
-	ClusterScopedReadDesireResourceType = nestedResourceType(
-		api.ClusterResourceTypeName, ReadDesireResourceTypeName,
-	)
+	ClusterScopedReadDesireResourceType = nestedResourceType(api.ClusterResourceTypeName, ReadDesireResourceTypeName)
 	// NodePoolScopedReadDesireResourceType is readDesires nested under a NodePool under a Cluster.
-	NodePoolScopedReadDesireResourceType = nestedResourceType(
-		api.ClusterResourceTypeName, api.NodePoolResourceTypeName, ReadDesireResourceTypeName,
-	)
+	NodePoolScopedReadDesireResourceType = nestedResourceType(api.ClusterResourceTypeName, api.NodePoolResourceTypeName, ReadDesireResourceTypeName)
 )

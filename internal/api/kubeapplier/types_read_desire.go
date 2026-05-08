@@ -50,20 +50,6 @@ type ReadDesireSpec struct {
 	TargetItem ResourceReference `json:"targetItem,omitempty"`
 }
 
-type ResourceReference struct {
-	// Group is the API group of the target resource. Empty for the core API.
-	Group string `json:"group"`
-	// Version is the API version of the target resource (e.g. "v1", "v1beta1").
-	// Required: the dynamic client builds URLs from it and has no fallback.
-	Version string `json:"version"`
-	// Resource is the lower-cased plural resource name (e.g. "configmaps").
-	Resource string `json:"resource"`
-	// Namespace is the namespace of the target resource. Empty for cluster-scoped resources.
-	Namespace string `json:"namespace,omitempty"`
-	// Name is the name of the target resource.
-	Name string `json:"name"`
-}
-
 type ReadDesireStatus struct {
 	// Conditions reports per-desire reconciliation status. Well-known types:
 	//   - "Successful":   the informer has synced and KubeContent reflects

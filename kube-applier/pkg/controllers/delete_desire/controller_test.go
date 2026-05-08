@@ -85,7 +85,7 @@ func TestEvaluate_TargetGoneIsSuccessful(t *testing.T) {
 		t.Fatalf("evaluate: %v", err)
 	}
 	mutate(desire)
-	if got := findCond(desire.Status.Conditions, kubeapplier.ConditionSuccessful); got == nil ||
+	if got := findCond(desire.Status.Conditions, kubeapplier.ConditionTypeSuccessful); got == nil ||
 		got.Status != metav1.ConditionTrue {
 		t.Errorf("Successful=%v, want True (target absent)", got)
 	}
@@ -107,12 +107,12 @@ func TestEvaluate_TargetWithDeletionTimestampWaits(t *testing.T) {
 		t.Fatalf("evaluate: %v", err)
 	}
 	mutate(desire)
-	got := findCond(desire.Status.Conditions, kubeapplier.ConditionSuccessful)
+	got := findCond(desire.Status.Conditions, kubeapplier.ConditionTypeSuccessful)
 	if got == nil || got.Status != metav1.ConditionFalse {
 		t.Fatalf("Successful=%v, want False (waiting)", got)
 	}
-	if got.Reason != kubeapplier.ReasonWaitingForDeletion {
-		t.Errorf("Reason = %q, want %q", got.Reason, kubeapplier.ReasonWaitingForDeletion)
+	if got.Reason != kubeapplier.ConditionReasonWaitingForDeletion {
+		t.Errorf("Reason = %q, want %q", got.Reason, kubeapplier.ConditionReasonWaitingForDeletion)
 	}
 	if !contains(got.Message, "doomed-uid") {
 		t.Errorf("Message %q does not contain UID", got.Message)
@@ -167,8 +167,8 @@ func TestEvaluate_PresentNoTSIssuesDelete_ThenWaitsForFinalizers(t *testing.T) {
 		t.Fatalf("evaluate: %v", err)
 	}
 	mutate(desire)
-	got := findCond(desire.Status.Conditions, kubeapplier.ConditionSuccessful)
-	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != kubeapplier.ReasonWaitingForDeletion {
+	got := findCond(desire.Status.Conditions, kubeapplier.ConditionTypeSuccessful)
+	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != kubeapplier.ConditionReasonWaitingForDeletion {
 		t.Errorf("Successful=%v, want False/WaitingForDeletion", got)
 	}
 }
@@ -189,8 +189,8 @@ func TestEvaluate_DeleteAPIErrorClassifiesAsKubeAPIError(t *testing.T) {
 	})
 	mutate, _ := c.evaluate(context.Background(), desire)
 	mutate(desire)
-	got := findCond(desire.Status.Conditions, kubeapplier.ConditionSuccessful)
-	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != kubeapplier.ReasonKubeAPIError {
+	got := findCond(desire.Status.Conditions, kubeapplier.ConditionTypeSuccessful)
+	if got == nil || got.Status != metav1.ConditionFalse || got.Reason != kubeapplier.ConditionReasonKubeAPIError {
 		t.Errorf("Successful=%v, want False/KubeAPIError", got)
 	}
 }
@@ -203,8 +203,8 @@ func TestEvaluate_BadTargetIsPreCheckFailed(t *testing.T) {
 	})
 	mutate, _ := c.evaluate(context.Background(), desire)
 	mutate(desire)
-	got := findCond(desire.Status.Conditions, kubeapplier.ConditionSuccessful)
-	if got == nil || got.Reason != kubeapplier.ReasonPreCheckFailed {
+	got := findCond(desire.Status.Conditions, kubeapplier.ConditionTypeSuccessful)
+	if got == nil || got.Reason != kubeapplier.ConditionReasonPreCheckFailed {
 		t.Errorf("Successful=%v, want PreCheckFailed", got)
 	}
 }

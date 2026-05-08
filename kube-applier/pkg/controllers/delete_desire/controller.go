@@ -40,22 +40,21 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
 	"github.com/Azure/ARO-HCP/internal/database"
-	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
+	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/desirestatuswriter"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
-	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )
 
 // DeleteDesireController reconciles DeleteDesires by deleting their target items
 // and reporting WaitingForDeletion until the items actually disappear.
 type DeleteDesireController struct {
-	name     string
-	informer cache.SharedIndexInformer
-	fetcher  *deleteDesireFetcher
-	dyn      dynamic.Interface
-	writer   statuswriter.StatusWriter[kubeapplier.DeleteDesire, keys.DeleteDesireKey]
-	queue    workqueue.TypedRateLimitingInterface[keys.DeleteDesireKey]
+	name                 string
+	deleteDesireInformer cache.SharedIndexInformer
+	fetcher              *deleteDesireFetcher
+	dyn                  dynamic.Interface
+	writer               desirestatuswriter.StatusWriter[kubeapplier.DeleteDesire, keys.DeleteDesireKey]
+	queue                workqueue.TypedRateLimitingInterface[keys.DeleteDesireKey]
 }
 
 // NewDeleteDesireController wires up the informer event handler and returns a
@@ -66,18 +65,17 @@ type DeleteDesireController struct {
 // status replaces can be issued under the desire's own cluster/nodepool
 // resource ID rather than a sentinel parent.
 func NewDeleteDesireController(
-	informer cache.SharedIndexInformer,
-	lister listers.DeleteDesireLister,
+	deleteDesireInformer cache.SharedIndexInformer,
 	dyn dynamic.Interface,
 	crudByParent database.KubeApplierDeleteDesireCRUD,
 ) (*DeleteDesireController, error) {
-	fetcher := &deleteDesireFetcher{lister: lister}
+	fetcher := &deleteDesireFetcher{crudByParent: crudByParent}
 	c := &DeleteDesireController{
-		name:     "DeleteDesireController",
-		informer: informer,
-		fetcher:  fetcher,
-		dyn:      dyn,
-		writer: statuswriter.New[kubeapplier.DeleteDesire, keys.DeleteDesireKey, *kubeapplier.DeleteDesire](
+		name:                 "DeleteDesireController",
+		deleteDesireInformer: deleteDesireInformer,
+		fetcher:              fetcher,
+		dyn:                  dyn,
+		writer: desirestatuswriter.New[kubeapplier.DeleteDesire, keys.DeleteDesireKey, *kubeapplier.DeleteDesire](
 			fetcher,
 			&deleteDesireReplacer{crudByParent: crudByParent},
 		),
@@ -87,7 +85,7 @@ func NewDeleteDesireController(
 		),
 	}
 
-	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := deleteDesireInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj any) { c.enqueue(obj) },
 	}); err != nil {
@@ -152,10 +150,10 @@ func (c *DeleteDesireController) processNext(ctx context.Context) bool {
 // SyncOnce performs a single reconcile pass for the named DeleteDesire.
 func (c *DeleteDesireController) SyncOnce(ctx context.Context, key keys.DeleteDesireKey) error {
 	desire, err := c.fetcher.Fetch(ctx, key)
+	if database.IsNotFoundError(err) {
+		return nil
+	}
 	if err != nil {
-		if database.IsNotFoundError(err) {
-			return nil
-		}
 		return err
 	}
 	if desire == nil {
@@ -186,7 +184,7 @@ func (c *DeleteDesireController) SyncOnce(ctx context.Context, key keys.DeleteDe
 // spec.targetItem, and scope is decided by namespace presence. If the GVR
 // doesn't resolve, the dynamic client surfaces a kube error that lands in
 // SetSuccessful as KubeAPIError.
-func (c *DeleteDesireController) evaluate(ctx context.Context, d *kubeapplier.DeleteDesire) (statuswriter.MutateFunc[kubeapplier.DeleteDesire], error) {
+func (c *DeleteDesireController) evaluate(ctx context.Context, d *kubeapplier.DeleteDesire) (desirestatuswriter.MutateFunc[kubeapplier.DeleteDesire], error) {
 	target := d.Spec.TargetItem
 	if len(target.Resource) == 0 || len(target.Version) == 0 || len(target.Name) == 0 {
 		err := conditions.NewPreCheckError(errors.New("spec.targetItem requires version, resource, and name"))
@@ -205,6 +203,11 @@ func (c *DeleteDesireController) evaluate(ctx context.Context, d *kubeapplier.De
 
 	got, getErr := kubeResourceAccessor.Get(ctx, target.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(getErr) {
+		// Target is gone. We do not try to distinguish "kube-applier deleted
+		// it just now" from "it was already absent before we ran" — neither
+		// the apiserver nor any prior status field carries the necessary
+		// signal, and the desired post-condition (target absent) is the same
+		// in both cases.
 		return func(d *kubeapplier.DeleteDesire) {
 			conditions.SetSuccessful(&d.Status.Conditions, nil)
 			conditions.SetDegraded(&d.Status.Conditions, nil)
@@ -243,6 +246,12 @@ func (c *DeleteDesireController) evaluate(ctx context.Context, d *kubeapplier.De
 
 	// Re-read post-delete to capture the deletion-timestamp + UID for the
 	// "waiting for finalizers" message — readme requires this verbatim.
+	//
+	// At-least-once semantic: a controller crash between the Delete above
+	// and any of the writes that follow is harmless. The next reconcile
+	// re-Gets, finds the object either gone or terminating, and publishes
+	// the right status. A duplicate Delete on an already-terminating object
+	// is a no-op at the apiserver.
 	post, postErr := kubeResourceAccessor.Get(ctx, target.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(postErr) {
 		return func(d *kubeapplier.DeleteDesire) {
@@ -289,28 +298,31 @@ func classifyAsDegraded(err error) error {
 	return err
 }
 
-// deleteDesireFetcher implements statuswriter.Fetcher over a DeleteDesireLister.
+// deleteDesireFetcher implements desirestatuswriter.Fetcher by going to a
+// live Cosmos client per call. See the apply_desire counterpart for why
+// the lister cache is the wrong source here.
 type deleteDesireFetcher struct {
-	lister listers.DeleteDesireLister
+	crudByParent database.KubeApplierDeleteDesireCRUD
 }
 
-var _ statuswriter.Fetcher[kubeapplier.DeleteDesire, keys.DeleteDesireKey] = &deleteDesireFetcher{}
+var _ desirestatuswriter.Fetcher[kubeapplier.DeleteDesire, keys.DeleteDesireKey] = &deleteDesireFetcher{}
 
 func (f *deleteDesireFetcher) Fetch(ctx context.Context, key keys.DeleteDesireKey) (*kubeapplier.DeleteDesire, error) {
-	if key.IsNodePoolScoped() {
-		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
+	crud, err := f.crudByParent.DeleteDesires(key.ResourceParent())
+	if err != nil {
+		return nil, fmt.Errorf("crud for parent %v: %w", key.ResourceParent(), err)
 	}
-	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+	return crud.Get(ctx, key.Name)
 }
 
-// deleteDesireReplacer implements statuswriter.Replacer over a
+// deleteDesireReplacer implements desirestatuswriter.Replacer over a
 // KubeApplierDeleteDesireCRUD. See the apply_desire counterpart for why
 // the parent must be derived per-call instead of fixed at construction.
 type deleteDesireReplacer struct {
 	crudByParent database.KubeApplierDeleteDesireCRUD
 }
 
-var _ statuswriter.Replacer[kubeapplier.DeleteDesire] = &deleteDesireReplacer{}
+var _ desirestatuswriter.Replacer[kubeapplier.DeleteDesire] = &deleteDesireReplacer{}
 
 func (r *deleteDesireReplacer) Replace(ctx context.Context, desired *kubeapplier.DeleteDesire) error {
 	key, err := keys.DeleteDesireKeyFromResourceID(desired.GetResourceID())

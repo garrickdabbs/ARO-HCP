@@ -23,9 +23,10 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api"
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
-	"github.com/Azure/ARO-HCP/internal/database/listertesting"
+	"github.com/Azure/ARO-HCP/internal/database"
+	"github.com/Azure/ARO-HCP/internal/databasetesting"
+	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/desirestatuswriter"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
-	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )
 
 const (
@@ -106,18 +107,67 @@ func (f *fakePerInstance) IsRunning() bool {
 	return f.running
 }
 
-// newTestController builds a manager that uses a SliceReadDesireLister and a
-// recording fake-factory, so lifecycle tests can run without spinning up real
-// reflectors or workqueues.
+// newTestController builds a manager that pulls desires from the supplied
+// MockKubeApplierClient and uses a recording fake-factory, so lifecycle
+// tests can run without spinning up real reflectors or workqueues.
 func newTestController(
-	lister *listertesting.SliceReadDesireLister,
+	mock *databasetesting.MockKubeApplierClient,
 	fakes *[]*fakePerInstance,
 ) *ReadDesireInformerManagingController {
 	return &ReadDesireInformerManagingController{
-		fetcher: &readDesireFetcher{lister: lister},
+		fetcher: &readDesireFetcher{crudByParent: mock.KubeApplier(testManagement)},
 		factory: &recordingFakeFactory{fakes: fakes},
 		running: map[keys.ReadDesireKey]*runningInstance{},
 		writer:  noopStatusWriter[kubeapplier.ReadDesire, keys.ReadDesireKey]{},
+	}
+}
+
+// loadDesires inserts the provided ReadDesires into the mock under the
+// canonical (subscriptionID, resourceGroup, cluster) parent. The test desires
+// all share the same parent in this file's fixtures.
+func loadDesires(t *testing.T, mock *databasetesting.MockKubeApplierClient, ds ...*kubeapplier.ReadDesire) {
+	t.Helper()
+	parent := database.ResourceParent{SubscriptionID: testSub, ResourceGroupName: testRG, ClusterName: testCluster}
+	crud, err := mock.KubeApplier(testManagement).ReadDesires(parent)
+	if err != nil {
+		t.Fatalf("ReadDesires(parent): %v", err)
+	}
+	for _, d := range ds {
+		if _, err := crud.Create(context.Background(), d, nil); err != nil {
+			t.Fatalf("Create %s: %v", d.GetResourceID(), err)
+		}
+	}
+}
+
+// deleteDesire removes a ReadDesire from the mock store.
+func deleteDesire(t *testing.T, mock *databasetesting.MockKubeApplierClient, d *kubeapplier.ReadDesire) {
+	t.Helper()
+	parent := database.ResourceParent{SubscriptionID: testSub, ResourceGroupName: testRG, ClusterName: testCluster}
+	crud, err := mock.KubeApplier(testManagement).ReadDesires(parent)
+	if err != nil {
+		t.Fatalf("ReadDesires(parent): %v", err)
+	}
+	if err := crud.Delete(context.Background(), d.GetResourceID().Name); err != nil {
+		t.Fatalf("Delete %s: %v", d.GetResourceID(), err)
+	}
+}
+
+// replaceDesire swaps a ReadDesire's TargetItem in the mock store.
+func replaceDesire(t *testing.T, mock *databasetesting.MockKubeApplierClient, d *kubeapplier.ReadDesire) {
+	t.Helper()
+	parent := database.ResourceParent{SubscriptionID: testSub, ResourceGroupName: testRG, ClusterName: testCluster}
+	crud, err := mock.KubeApplier(testManagement).ReadDesires(parent)
+	if err != nil {
+		t.Fatalf("ReadDesires(parent): %v", err)
+	}
+	// Refresh the desire's etag from the live store so Replace is accepted.
+	live, err := crud.Get(context.Background(), d.GetResourceID().Name)
+	if err != nil {
+		t.Fatalf("Get %s: %v", d.GetResourceID(), err)
+	}
+	d.CosmosETag = live.CosmosETag
+	if _, err := crud.Replace(context.Background(), d, nil); err != nil {
+		t.Fatalf("Replace %s: %v", d.GetResourceID(), err)
 	}
 }
 
@@ -142,9 +192,10 @@ func TestManagerSyncOnce_LaunchesPerInstanceController(t *testing.T) {
 
 	target := kubeapplier.ResourceReference{Resource: "configmaps", Namespace: "default", Name: "x"}
 	desire := newReadDesire(t, target)
-	lister := &listertesting.SliceReadDesireLister{Desires: []*kubeapplier.ReadDesire{desire}}
+	mock := databasetesting.NewMockKubeApplierClient()
+	loadDesires(t, mock, desire)
 	var fakes []*fakePerInstance
-	c := newTestController(lister, &fakes)
+	c := newTestController(mock, &fakes)
 	key := keyFor(t, desire)
 
 	if err := c.SyncOnce(ctx, key); err != nil {
@@ -169,9 +220,10 @@ func TestManagerSyncOnce_RestartsOnTargetChange(t *testing.T) {
 	t1 := kubeapplier.ResourceReference{Resource: "configmaps", Namespace: "default", Name: "x"}
 	t2 := kubeapplier.ResourceReference{Resource: "configmaps", Namespace: "default", Name: "y"}
 	desire := newReadDesire(t, t1)
-	lister := &listertesting.SliceReadDesireLister{Desires: []*kubeapplier.ReadDesire{desire}}
+	mock := databasetesting.NewMockKubeApplierClient()
+	loadDesires(t, mock, desire)
 	var fakes []*fakePerInstance
-	c := newTestController(lister, &fakes)
+	c := newTestController(mock, &fakes)
 	key := keyFor(t, desire)
 
 	if err := c.SyncOnce(ctx, key); err != nil {
@@ -179,8 +231,9 @@ func TestManagerSyncOnce_RestartsOnTargetChange(t *testing.T) {
 	}
 	<-fakes[0].started
 
-	// Mutate the desire to point at a different target and resync.
+	// Mutate the desire's TargetItem in the store and resync.
 	desire.Spec.TargetItem = t2
+	replaceDesire(t, mock, desire)
 	if err := c.SyncOnce(ctx, key); err != nil {
 		t.Fatalf("second SyncOnce: %v", err)
 	}
@@ -204,9 +257,10 @@ func TestManagerSyncOnce_NoOpWhenTargetUnchanged(t *testing.T) {
 
 	target := kubeapplier.ResourceReference{Resource: "configmaps", Namespace: "default", Name: "x"}
 	desire := newReadDesire(t, target)
-	lister := &listertesting.SliceReadDesireLister{Desires: []*kubeapplier.ReadDesire{desire}}
+	mock := databasetesting.NewMockKubeApplierClient()
+	loadDesires(t, mock, desire)
 	var fakes []*fakePerInstance
-	c := newTestController(lister, &fakes)
+	c := newTestController(mock, &fakes)
 	key := keyFor(t, desire)
 
 	if err := c.SyncOnce(ctx, key); err != nil {
@@ -226,9 +280,10 @@ func TestManagerSyncOnce_StopsOnDelete(t *testing.T) {
 
 	target := kubeapplier.ResourceReference{Resource: "configmaps", Namespace: "default", Name: "x"}
 	desire := newReadDesire(t, target)
-	lister := &listertesting.SliceReadDesireLister{Desires: []*kubeapplier.ReadDesire{desire}}
+	mock := databasetesting.NewMockKubeApplierClient()
+	loadDesires(t, mock, desire)
 	var fakes []*fakePerInstance
-	c := newTestController(lister, &fakes)
+	c := newTestController(mock, &fakes)
 	key := keyFor(t, desire)
 
 	if err := c.SyncOnce(ctx, key); err != nil {
@@ -236,8 +291,8 @@ func TestManagerSyncOnce_StopsOnDelete(t *testing.T) {
 	}
 	<-fakes[0].started
 
-	// Remove the desire from the lister and resync.
-	lister.Desires = nil
+	// Remove the desire from the store and resync.
+	deleteDesire(t, mock, desire)
 	if err := c.SyncOnce(ctx, key); err != nil {
 		t.Fatalf("second SyncOnce: %v", err)
 	}
@@ -252,6 +307,6 @@ func TestManagerSyncOnce_StopsOnDelete(t *testing.T) {
 // conditions package's own tests.
 type noopStatusWriter[T any, K comparable] struct{}
 
-func (noopStatusWriter[T, K]) UpdateStatus(ctx context.Context, key K, mutate statuswriter.MutateFunc[T]) error {
+func (noopStatusWriter[T, K]) UpdateStatus(ctx context.Context, key K, mutate desirestatuswriter.MutateFunc[T]) error {
 	return nil
 }

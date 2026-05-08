@@ -21,7 +21,13 @@ import (
 	"github.com/Azure/ARO-HCP/internal/api"
 )
 
-// ApplyDesire indicates a kube manifest in .spec.kubeContent to issue a server-side-apply for.
+// ApplyDesire holds a single Kubernetes object to be server-side-applied to
+// the management cluster's apiserver. Each ApplyDesire targets exactly one
+// kube object — there is no list form.
+//
+// Deleting an ApplyDesire from Cosmos has no effect on the kube object that
+// was applied. To remove the kube object, create a corresponding DeleteDesire.
+//
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 type ApplyDesire struct {
 	// CosmosMetadata.ResourceID is nested under an HCPOpenShiftCluster (and
@@ -53,6 +59,12 @@ type ApplyDesireSpec struct {
 	// KubeContent is a single Kubernetes object (not a List) to be applied
 	// with server-side-apply and Force=true. The object must carry apiVersion,
 	// kind, metadata.name, and metadata.namespace if namespaced.
+	//
+	// The kube-applier always issues SSA with FieldManager="aro-hcp-kube-applier".
+	// The manager name is intentionally not configurable via this API: every
+	// field the kube-applier owns on the cluster traces to that one string,
+	// so an operator inspecting fieldsV1 metadata can attribute ownership at
+	// a glance.
 	KubeContent runtime.RawExtension `json:"kubeContent"`
 }
 

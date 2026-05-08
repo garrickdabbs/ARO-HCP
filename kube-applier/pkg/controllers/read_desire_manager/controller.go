@@ -34,12 +34,11 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
 	"github.com/Azure/ARO-HCP/internal/database"
-	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
+	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/desirestatuswriter"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/read_desire_kubernetes"
-	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )
 
 // PerInstanceController abstracts the per-ReadDesire kube reflector so the
@@ -58,12 +57,17 @@ type PerInstanceFactory interface {
 // ReadDesireInformerManagingController watches ReadDesires and manages the
 // per-instance kubernetes reflectors.
 type ReadDesireInformerManagingController struct {
-	informer cache.SharedIndexInformer
-	fetcher  *readDesireFetcher
-	factory  PerInstanceFactory
-	writer   statuswriter.StatusWriter[kubeapplier.ReadDesire, keys.ReadDesireKey]
-	queue    workqueue.TypedRateLimitingInterface[keys.ReadDesireKey]
+	readDesireInformer cache.SharedIndexInformer
+	fetcher            *readDesireFetcher
+	factory            PerInstanceFactory
+	writer             desirestatuswriter.StatusWriter[kubeapplier.ReadDesire, keys.ReadDesireKey]
+	queue              workqueue.TypedRateLimitingInterface[keys.ReadDesireKey]
 
+	// running tracks the live per-instance ReadDesireKubernetesController for
+	// each ReadDesire by its key. The map is mutated only under mu. SyncOnce
+	// reads it to decide whether to spawn a fresh per-instance controller,
+	// stop+respawn when TargetItem changed, or no-op when the running entry
+	// already matches the desire.
 	mu      sync.Mutex
 	running map[keys.ReadDesireKey]*runningInstance
 }
@@ -82,28 +86,27 @@ type runningInstance struct {
 // per-instance controller it spawns — can be issued under each desire's own
 // cluster/nodepool resource ID rather than a sentinel parent.
 func NewReadDesireInformerManagingController(
-	informer cache.SharedIndexInformer,
-	lister listers.ReadDesireLister,
+	readDesireInformer cache.SharedIndexInformer,
 	dyn dynamic.Interface,
 	crudByParent database.KubeApplierReadDesireCRUD,
 ) (*ReadDesireInformerManagingController, error) {
-	fetcher := &readDesireFetcher{lister: lister}
+	fetcher := &readDesireFetcher{crudByParent: crudByParent}
 	c := &ReadDesireInformerManagingController{
-		informer: informer,
-		fetcher:  fetcher,
-		factory:  &realPerInstanceFactory{dyn: dyn, lister: lister, crudByParent: crudByParent},
+		readDesireInformer: readDesireInformer,
+		fetcher:            fetcher,
+		factory:            &realPerInstanceFactory{dyn: dyn, crudByParent: crudByParent},
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
 			workqueue.DefaultTypedControllerRateLimiter[keys.ReadDesireKey](),
 			workqueue.TypedRateLimitingQueueConfig[keys.ReadDesireKey]{Name: "ReadDesireInformerManagingController"},
 		),
-		writer: statuswriter.New[kubeapplier.ReadDesire, keys.ReadDesireKey, *kubeapplier.ReadDesire](
+		writer: desirestatuswriter.New[kubeapplier.ReadDesire, keys.ReadDesireKey, *kubeapplier.ReadDesire](
 			fetcher,
 			&readDesireReplacer{crudByParent: crudByParent},
 		),
 		running: map[keys.ReadDesireKey]*runningInstance{},
 	}
 
-	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := readDesireInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj any) { c.enqueue(obj) },
 		DeleteFunc: func(obj any) { c.enqueue(obj) },
@@ -117,11 +120,10 @@ func NewReadDesireInformerManagingController(
 func (c *ReadDesireInformerManagingController) SetFactory(f PerInstanceFactory) { c.factory = f }
 
 // realPerInstanceFactory is the production PerInstanceFactory: it builds a
-// real ReadDesireKubernetesController against the supplied dynamic client,
-// lister, and CRUD provider.
+// real ReadDesireKubernetesController against the supplied dynamic client
+// and CRUD provider.
 type realPerInstanceFactory struct {
 	dyn          dynamic.Interface
-	lister       listers.ReadDesireLister
 	crudByParent database.KubeApplierReadDesireCRUD
 }
 
@@ -130,7 +132,7 @@ var _ PerInstanceFactory = &realPerInstanceFactory{}
 func (f *realPerInstanceFactory) Build(
 	key keys.ReadDesireKey, target kubeapplier.ResourceReference,
 ) (PerInstanceController, error) {
-	return read_desire_kubernetes.NewReadDesireKubernetesController(key, target, f.dyn, f.lister, f.crudByParent)
+	return read_desire_kubernetes.NewReadDesireKubernetesController(key, target, f.dyn, f.crudByParent)
 }
 
 // Run starts the workers. Threadiness > 1 is supported but not necessary —
@@ -241,6 +243,16 @@ func (c *ReadDesireInformerManagingController) SyncOnce(ctx context.Context, key
 		per.Run(childCtx)
 	}()
 
+	// WatchStarted is published only when (re)launching, not on every
+	// reconcile, because SetWatchStarted unconditionally bumps
+	// LastTransitionTime and a steady stream of writes would make the
+	// timestamp meaningless. If this UpdateStatus errors and the workqueue
+	// retries SyncOnce, the retry's "running[key].target == target"
+	// short-circuit will return nil without rewriting WatchStarted. That is
+	// an accepted gap: WatchStarted will be republished on the next genuine
+	// (re)launch — a target change, a manager restart, or the per-instance
+	// controller exiting and being respawned. In the steady state the per-
+	// instance controller is what surfaces ongoing health via Successful.
 	return c.writer.UpdateStatus(ctx, key, func(d *kubeapplier.ReadDesire) {
 		conditions.SetWatchStarted(&d.Status.Conditions, "watch (re)launched")
 	})
@@ -280,23 +292,26 @@ func (c *ReadDesireInformerManagingController) Running(key keys.ReadDesireKey) b
 	return ok
 }
 
-// readDesireFetcher implements statuswriter.Fetcher over a ReadDesireLister.
-// Defined here to keep the manager self-contained; the per-instance
-// controller package has its own equivalent struct.
+// readDesireFetcher implements desirestatuswriter.Fetcher by going to a
+// live Cosmos client per call. See the apply_desire counterpart for why
+// the lister cache is the wrong source here. Defined here to keep the
+// manager self-contained; the per-instance controller package has its
+// own equivalent struct.
 type readDesireFetcher struct {
-	lister listers.ReadDesireLister
+	crudByParent database.KubeApplierReadDesireCRUD
 }
 
-var _ statuswriter.Fetcher[kubeapplier.ReadDesire, keys.ReadDesireKey] = &readDesireFetcher{}
+var _ desirestatuswriter.Fetcher[kubeapplier.ReadDesire, keys.ReadDesireKey] = &readDesireFetcher{}
 
 func (f *readDesireFetcher) Fetch(ctx context.Context, key keys.ReadDesireKey) (*kubeapplier.ReadDesire, error) {
-	if key.IsNodePoolScoped() {
-		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
+	crud, err := f.crudByParent.ReadDesires(key.ResourceParent())
+	if err != nil {
+		return nil, fmt.Errorf("crud for parent %v: %w", key.ResourceParent(), err)
 	}
-	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+	return crud.Get(ctx, key.Name)
 }
 
-// readDesireReplacer implements statuswriter.Replacer over a
+// readDesireReplacer implements desirestatuswriter.Replacer over a
 // KubeApplierReadDesireCRUD. The manager has its own writer for the
 // WatchStarted condition; the spawned per-instance controllers have
 // their own writer for KubeContent. Both writers go through a Replacer
@@ -305,7 +320,7 @@ type readDesireReplacer struct {
 	crudByParent database.KubeApplierReadDesireCRUD
 }
 
-var _ statuswriter.Replacer[kubeapplier.ReadDesire] = &readDesireReplacer{}
+var _ desirestatuswriter.Replacer[kubeapplier.ReadDesire] = &readDesireReplacer{}
 
 func (r *readDesireReplacer) Replace(ctx context.Context, desired *kubeapplier.ReadDesire) error {
 	key, err := keys.ReadDesireKeyFromResourceID(desired.GetResourceID())

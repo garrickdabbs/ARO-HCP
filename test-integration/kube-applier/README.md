@@ -13,6 +13,19 @@ The controllers run in-process against:
   interface, so a future joint backend+kube-applier test can swap in an
   implementation that shares storage with the backend's MockDBClient.
 
+### What is envtest?
+
+[envtest](https://book.kubebuilder.io/reference/envtest.html) is the
+[`sigs.k8s.io/controller-runtime`](https://pkg.go.dev/sigs.k8s.io/controller-runtime/pkg/envtest)
+package that boots a real `kube-apiserver` + `etcd` in-process against a
+local copy of the kubebuilder binaries. It is the controller-runtime project
+maintainer's preferred way to test against a real apiserver without the
+overhead of a full cluster (e.g. `kind` or `minikube`); the apiserver speaks
+the actual API including admission, defaulting, and SSA conflict handling
+that a fake client cannot reproduce. Despite the name, envtest is shipped by
+controller-runtime, not directly by kubebuilder — it is just the binaries
+themselves that come from kubebuilder's release artifacts.
+
 ## Layout
 
 ```

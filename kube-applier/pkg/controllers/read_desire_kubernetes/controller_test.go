@@ -32,10 +32,11 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api"
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
-	"github.com/Azure/ARO-HCP/internal/database/listertesting"
+	"github.com/Azure/ARO-HCP/internal/database"
+	"github.com/Azure/ARO-HCP/internal/databasetesting"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
+	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/desirestatuswriter"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
-	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )
 
 const (
@@ -77,7 +78,7 @@ type recordingWriter struct {
 	desire  *kubeapplier.ReadDesire
 }
 
-func (w *recordingWriter) UpdateStatus(ctx context.Context, key keys.ReadDesireKey, mutate statuswriter.MutateFunc[kubeapplier.ReadDesire]) error {
+func (w *recordingWriter) UpdateStatus(ctx context.Context, key keys.ReadDesireKey, mutate desirestatuswriter.MutateFunc[kubeapplier.ReadDesire]) error {
 	if w.desire == nil {
 		return nil
 	}
@@ -124,13 +125,27 @@ func startSyncedController(
 	if err != nil {
 		t.Fatalf("derive key: %v", err)
 	}
-	readLister := &listertesting.SliceReadDesireLister{Desires: []*kubeapplier.ReadDesire{desire}}
-	c, err := NewReadDesireKubernetesController(key, target, dyn, readLister, nil)
+
+	// Pre-populate a MockKubeApplierClient with the desire so the
+	// controller's fetcher can read it back via the live-client contract.
+	mock := databasetesting.NewMockKubeApplierClient()
+	parent := database.ResourceParent{
+		SubscriptionID: testSub, ResourceGroupName: testRG, ClusterName: testCluster,
+	}
+	crud, err := mock.KubeApplier(testMgmt).ReadDesires(parent)
+	if err != nil {
+		t.Fatalf("ReadDesires(parent): %v", err)
+	}
+	if _, err := crud.Create(ctx, desire, nil); err != nil {
+		t.Fatalf("seed Create: %v", err)
+	}
+
+	c, err := NewReadDesireKubernetesController(key, target, dyn, mock.KubeApplier(testMgmt))
 	if err != nil {
 		t.Fatalf("NewReadDesireKubernetesController: %v", err)
 	}
 	// Replace the writer with a recorder so tests can assert on status updates
-	// without exercising the full statuswriter -> CRUD chain.
+	// without exercising the full desirestatuswriter -> CRUD chain.
 	w := &recordingWriter{desire: desire}
 	c.writer = w
 
@@ -171,7 +186,7 @@ func TestSyncOnce_TargetExists_PopulatesKubeContent(t *testing.T) {
 	if got["kind"] != "ConfigMap" {
 		t.Errorf("kind = %v, want ConfigMap", got["kind"])
 	}
-	cond := findCond(last.Status.Conditions, kubeapplier.ConditionSuccessful)
+	cond := findCond(last.Status.Conditions, kubeapplier.ConditionTypeSuccessful)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Errorf("Successful=%v, want True", cond)
 	}
@@ -196,7 +211,7 @@ func TestSyncOnce_TargetAbsent_ReportsSuccessful(t *testing.T) {
 	if len(last.Status.KubeContent.Raw) != 0 {
 		t.Errorf("KubeContent should be empty when target is absent, got %s", last.Status.KubeContent.Raw)
 	}
-	cond := findCond(last.Status.Conditions, kubeapplier.ConditionSuccessful)
+	cond := findCond(last.Status.Conditions, kubeapplier.ConditionTypeSuccessful)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Errorf("Successful=%v, want True", cond)
 	}
@@ -225,7 +240,7 @@ func TestNewReadDesireKubernetesController_RejectsIncompleteTarget(t *testing.T)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := NewReadDesireKubernetesController(keys.ReadDesireKey{}, tc.target, nil, nil, nil)
+			_, err := NewReadDesireKubernetesController(keys.ReadDesireKey{}, tc.target, nil, nil)
 			if err == nil {
 				t.Fatalf("expected error, got nil")
 			}

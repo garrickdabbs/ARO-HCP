@@ -100,8 +100,10 @@ If they are different, then we update the `.status.kubeContent` and write it bac
 
 ### ReadDesireInformerManagingController
 This controller will use the `ReadDesire` informer to feed a sync function for `ReadDesire` instances.
-Each time a particular `ReadDesire.spec.targetItem` changes,
-the old `ReadDesireKubernetesController` instance will be stopped, discarded, and a new one will be created.
+Each time a particular `ReadDesire.spec.targetItem` changes — that is, the
+GVR, namespace, or name identifying the kube object to watch (not changes to
+the watched object's own content) — the old `ReadDesireKubernetesController`
+instance will be stopped, discarded, and a new one will be created.
 When the `ReadDesireKubernetesController` is started, we will set
 1. `ReadDesire.status.conditions["WatchStarted"].status` is true
 2. `ReadDesire.status.conditions["WatchStarted"].reason` is "Launched"
@@ -136,9 +138,24 @@ When the sync loop runs, it will
 1. issue a server-side apply with force the `.spec.kubeContent`
 2. it will use the standard rules for `.status.conditions["Successful"]`
 
+#### Adopting existing resources
+SSA's `force=true` claims field ownership over fields the kube-applier writes
+even if a different field manager owned them previously, but it does **not**
+delete fields the prior owner wrote that are no longer in our object — those
+remain owned by the prior manager. Adopting resources that pre-date the
+kube-applier (e.g. created by hand or by maestro) therefore needs a one-time
+sweep to clear stale managedFields entries, or careful authoring of the
+ApplyDesire's `.spec.kubeContent` to cover every field of interest. We will
+solve this case-by-case rather than baking adoption logic into the kube-applier.
+
 ## Testing
-Unit tests will use the https://github.com/openshift/library-go/tree/master/pkg/manifestclient library to create fake kubernetes clients
+Unit tests use the https://github.com/openshift/library-go/tree/master/pkg/manifestclient library to create fake kubernetes clients
 and the `internal/databasetesting` and `internal/database/listertesting` packages to create fake `KubeApplier` clients.
 
-Integration tests will use KIND to create a real kubernetes client and the `internal/databasetesting` and
-`internal/database/listertesting` packages to create fake `KubeApplier` clients.
+Integration tests use [envtest](https://book.kubebuilder.io/reference/envtest.html)
+(via `sigs.k8s.io/controller-runtime`) to bring up a real `kube-apiserver` +
+`etcd` in-process, paired with the same fake `KubeApplier` clients from
+`internal/databasetesting` and `internal/database/listertesting`. envtest
+gives us the actual SSA conflict and admission semantics that a fake client
+cannot reproduce, without the Docker dependency a `kind`-based suite would
+need. See `test-integration/kube-applier/README.md` for setup.

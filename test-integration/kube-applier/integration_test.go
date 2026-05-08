@@ -42,8 +42,15 @@ import (
 var artifacts embed.FS
 
 var (
+	// testEnv is sigs.k8s.io/controller-runtime's envtest harness. It is
+	// started once in TestMain (which boots the kube-apiserver + etcd
+	// binaries pointed at by KUBEBUILDER_ASSETS) and stopped after the
+	// suite. All cases share this single cluster.
 	testEnv *envtest.Environment
-	cfg     *rest.Config
+	// cfg is the *rest.Config produced by testEnv.Start, scoped to the
+	// envtest-managed apiserver. Each test case consumes it via
+	// dynamic.NewForConfig to talk to that cluster.
+	cfg *rest.Config
 )
 
 const setupHelp = `KUBEBUILDER_ASSETS is not set. The kube-applier integration tests need

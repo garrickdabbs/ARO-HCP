@@ -34,7 +34,6 @@ import (
 	"k8s.io/component-base/metrics/legacyregistry"
 
 	"github.com/Azure/ARO-HCP/internal/database/informers"
-	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/internal/version"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/apply_desire"
@@ -145,24 +144,20 @@ func (o *Options) runControllersUnderLeaderElection(
 	deleteInformer := informers.NewDeleteDesireInformer(partitionListers.DeleteDesires())
 	readInformer := informers.NewReadDesireInformer(partitionListers.ReadDesires())
 
-	applyLister := listers.NewApplyDesireLister(applyInformer.GetIndexer())
-	deleteLister := listers.NewDeleteDesireLister(deleteInformer.GetIndexer())
-	readLister := listers.NewReadDesireLister(readInformer.GetIndexer())
-
 	// Each controller takes its peer interface off the same per-management-cluster
 	// KubeApplierCRUD so status replaces use the correct (cluster, [nodepool])
 	// parent for every desire they touch.
 	kubeApplierCRUD := o.KubeApplierClient.KubeApplier(o.ManagementCluster)
 
-	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, applyLister, o.DynamicClient, kubeApplierCRUD)
+	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, o.DynamicClient, kubeApplierCRUD)
 	if err != nil {
 		return fmt.Errorf("apply controller: %w", err)
 	}
-	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, deleteLister, o.DynamicClient, kubeApplierCRUD)
+	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, o.DynamicClient, kubeApplierCRUD)
 	if err != nil {
 		return fmt.Errorf("delete controller: %w", err)
 	}
-	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, readLister, o.DynamicClient, kubeApplierCRUD)
+	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, o.DynamicClient, kubeApplierCRUD)
 	if err != nil {
 		return fmt.Errorf("read manager: %w", err)
 	}

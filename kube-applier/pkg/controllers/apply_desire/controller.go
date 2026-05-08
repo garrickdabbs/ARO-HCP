@@ -39,26 +39,27 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
 	"github.com/Azure/ARO-HCP/internal/database"
-	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
+	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/desirestatuswriter"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
-	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )
 
 // FieldManager is the SSA field-manager name the kube-applier uses when
 // applying ApplyDesires. All on-cluster ownership of fields written by the
-// kube-applier traces back to this string.
-const FieldManager = "kube-applier"
+// kube-applier traces back to this string. The "aro-hcp-" prefix exists so
+// an operator inspecting fieldsV1 metadata can tell at a glance that ARO-HCP
+// is the owner, distinct from any native Kubernetes "kube-..." manager.
+const FieldManager = "aro-hcp-kube-applier"
 
 // ApplyDesireController reconciles ApplyDesires by SSA-applying spec.kubeContent.
 type ApplyDesireController struct {
-	name     string
-	informer cache.SharedIndexInformer
-	fetcher  *applyDesireFetcher
-	dyn      dynamic.Interface
-	writer   statuswriter.StatusWriter[kubeapplier.ApplyDesire, keys.ApplyDesireKey]
-	queue    workqueue.TypedRateLimitingInterface[keys.ApplyDesireKey]
+	name                string
+	applyDesireInformer cache.SharedIndexInformer
+	fetcher             *applyDesireFetcher
+	dyn                 dynamic.Interface
+	writer              desirestatuswriter.StatusWriter[kubeapplier.ApplyDesire, keys.ApplyDesireKey]
+	queue               workqueue.TypedRateLimitingInterface[keys.ApplyDesireKey]
 }
 
 // NewApplyDesireController wires up the informer event handler and returns a
@@ -69,18 +70,17 @@ type ApplyDesireController struct {
 // status replaces can be issued under the desire's own cluster/nodepool
 // resource ID rather than a sentinel parent.
 func NewApplyDesireController(
-	informer cache.SharedIndexInformer,
-	lister listers.ApplyDesireLister,
+	applyDesireInformer cache.SharedIndexInformer,
 	dyn dynamic.Interface,
 	crudByParent database.KubeApplierApplyDesireCRUD,
 ) (*ApplyDesireController, error) {
-	fetcher := &applyDesireFetcher{lister: lister}
+	fetcher := &applyDesireFetcher{crudByParent: crudByParent}
 	c := &ApplyDesireController{
-		name:     "ApplyDesireController",
-		informer: informer,
-		fetcher:  fetcher,
-		dyn:      dyn,
-		writer: statuswriter.New[kubeapplier.ApplyDesire, keys.ApplyDesireKey, *kubeapplier.ApplyDesire](
+		name:                "ApplyDesireController",
+		applyDesireInformer: applyDesireInformer,
+		fetcher:             fetcher,
+		dyn:                 dyn,
+		writer: desirestatuswriter.New[kubeapplier.ApplyDesire, keys.ApplyDesireKey, *kubeapplier.ApplyDesire](
 			fetcher,
 			&applyDesireReplacer{crudByParent: crudByParent},
 		),
@@ -93,7 +93,7 @@ func NewApplyDesireController(
 	// Register the event handler at construction so events are delivered to
 	// the queue before the informer starts pumping. Adding it inside Run()
 	// races with the initial sync.
-	if _, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	if _, err := applyDesireInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { c.enqueue(obj) },
 		UpdateFunc: func(_, obj any) { c.enqueue(obj) },
 	}); err != nil {
@@ -159,10 +159,10 @@ func (c *ApplyDesireController) processNext(ctx context.Context) bool {
 // It is idempotent; concurrent invocations on different keys are safe.
 func (c *ApplyDesireController) SyncOnce(ctx context.Context, key keys.ApplyDesireKey) error {
 	desire, err := c.fetcher.Fetch(ctx, key)
+	if database.IsNotFoundError(err) {
+		return nil
+	}
 	if err != nil {
-		if database.IsNotFoundError(err) {
-			return nil
-		}
 		return err
 	}
 	if desire == nil {
@@ -245,22 +245,26 @@ func isClientError(err error) bool {
 	return false
 }
 
-// applyDesireFetcher implements statuswriter.Fetcher over an ApplyDesireLister,
-// dispatching to the correct scope-specific lister method based on the key.
+// applyDesireFetcher implements desirestatuswriter.Fetcher by going to a
+// live Cosmos client per call. The desirestatuswriter package contract
+// requires a live read so the etag passed to Replace is fresh; reading
+// from the lister cache here would lose the second of two back-to-back
+// status writes to a PreconditionFailed.
 type applyDesireFetcher struct {
-	lister listers.ApplyDesireLister
+	crudByParent database.KubeApplierApplyDesireCRUD
 }
 
-var _ statuswriter.Fetcher[kubeapplier.ApplyDesire, keys.ApplyDesireKey] = &applyDesireFetcher{}
+var _ desirestatuswriter.Fetcher[kubeapplier.ApplyDesire, keys.ApplyDesireKey] = &applyDesireFetcher{}
 
 func (f *applyDesireFetcher) Fetch(ctx context.Context, key keys.ApplyDesireKey) (*kubeapplier.ApplyDesire, error) {
-	if key.IsNodePoolScoped() {
-		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
+	crud, err := f.crudByParent.ApplyDesires(key.ResourceParent())
+	if err != nil {
+		return nil, fmt.Errorf("crud for parent %v: %w", key.ResourceParent(), err)
 	}
-	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+	return crud.Get(ctx, key.Name)
 }
 
-// applyDesireReplacer implements statuswriter.Replacer over a
+// applyDesireReplacer implements desirestatuswriter.Replacer over a
 // KubeApplierApplyDesireCRUD. It derives the (cluster, [nodepool]) parent
 // from each desire's resourceID at Replace time so a single Replacer can
 // serve desires across many parents.
@@ -268,7 +272,7 @@ type applyDesireReplacer struct {
 	crudByParent database.KubeApplierApplyDesireCRUD
 }
 
-var _ statuswriter.Replacer[kubeapplier.ApplyDesire] = &applyDesireReplacer{}
+var _ desirestatuswriter.Replacer[kubeapplier.ApplyDesire] = &applyDesireReplacer{}
 
 func (r *applyDesireReplacer) Replace(ctx context.Context, desired *kubeapplier.ApplyDesire) error {
 	key, err := keys.ApplyDesireKeyFromResourceID(desired.GetResourceID())

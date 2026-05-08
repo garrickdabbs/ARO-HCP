@@ -48,7 +48,6 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/database/informers"
-	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/databasetesting"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/apply_desire"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/delete_desire"
@@ -240,15 +239,11 @@ func startControllers(parent context.Context, t *testing.T, kac database.KubeApp
 	deleteInformer := informers.NewDeleteDesireInformerWithRelistDuration(partitionListers.DeleteDesires(), fastRelist)
 	readInformer := informers.NewReadDesireInformerWithRelistDuration(partitionListers.ReadDesires(), fastRelist)
 
-	applyLister := listers.NewApplyDesireLister(applyInformer.GetIndexer())
-	deleteLister := listers.NewDeleteDesireLister(deleteInformer.GetIndexer())
-	readLister := listers.NewReadDesireLister(readInformer.GetIndexer())
-
-	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, applyLister, dyn, kubeApplierCRUD)
+	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, dyn, kubeApplierCRUD)
 	require.NoError(t, err)
-	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, deleteLister, dyn, kubeApplierCRUD)
+	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, dyn, kubeApplierCRUD)
 	require.NoError(t, err)
-	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, readLister, dyn, kubeApplierCRUD)
+	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, dyn, kubeApplierCRUD)
 	require.NoError(t, err)
 
 	wg := &sync.WaitGroup{}

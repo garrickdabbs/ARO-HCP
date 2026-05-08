@@ -12,14 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package statuswriter offers a generic "read-mutate-replace" helper for
-// kube-applier *Desire status updates. The kube-applier never creates desires
-// (the backend does), so the helper deliberately omits the create-if-missing
-// branch present in backend's controllerutils.WriteController.
+// Package desirestatuswriter is the generic "read-mutate-replace" helper that
+// writes back the .status section of kube-applier *Desire Cosmos documents
+// (ApplyDesire, DeleteDesire, ReadDesire). It has nothing to do with the
+// .status section of the Kubernetes objects those desires target — that
+// content, when relevant, lives in ReadDesire.status.kubeContent and is
+// written by the per-instance ReadDesireKubernetesController, not by this
+// package.
+//
+// The kube-applier never creates desires (the backend does), so the helper
+// deliberately omits the create-if-missing branch present in backend's
+// controllerutils.WriteController.
 //
 // Callers supply two collaborators as named structs implementing Fetcher
-// and Replacer; the StatusWriter does not accept function-typed adapters.
-package statuswriter
+// and Replacer; the Writer does not accept function-typed adapters. Fetcher
+// implementations MUST go to a live Cosmos client rather than a cached
+// lister: the Replacer's etag check needs the freshest revision available,
+// or a controller that updates a desire twice in a row would lose the
+// second write to a PreconditionFailed.
+package desirestatuswriter
 
 import (
 	"context"

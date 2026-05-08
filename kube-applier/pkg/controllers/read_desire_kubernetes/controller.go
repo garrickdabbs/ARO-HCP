@@ -40,11 +40,10 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
 	"github.com/Azure/ARO-HCP/internal/database"
-	"github.com/Azure/ARO-HCP/internal/database/listers"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
+	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/desirestatuswriter"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
-	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/statuswriter"
 )
 
 // ResyncDuration is how often a ReadDesireKubernetesController re-evaluates
@@ -75,7 +74,7 @@ type ReadDesireKubernetesController struct {
 	dyn      dynamic.Interface
 	informer cache.SharedIndexInformer
 	fetcher  *readDesireFetcher
-	writer   statuswriter.StatusWriter[kubeapplier.ReadDesire, keys.ReadDesireKey]
+	writer   desirestatuswriter.StatusWriter[kubeapplier.ReadDesire, keys.ReadDesireKey]
 
 	queue workqueue.TypedRateLimitingInterface[keys.ReadDesireKey]
 }
@@ -97,14 +96,13 @@ func NewReadDesireKubernetesController(
 	key keys.ReadDesireKey,
 	target kubeapplier.ResourceReference,
 	dyn dynamic.Interface,
-	readLister listers.ReadDesireLister,
 	crudByParent database.KubeApplierReadDesireCRUD,
 ) (*ReadDesireKubernetesController, error) {
 	if len(target.Resource) == 0 || len(target.Version) == 0 || len(target.Name) == 0 {
 		return nil, conditions.NewPreCheckError(errors.New("spec.targetItem requires version, resource, and name"))
 	}
 
-	fetcher := &readDesireFetcher{lister: readLister}
+	fetcher := &readDesireFetcher{crudByParent: crudByParent}
 	c := &ReadDesireKubernetesController{
 		key:    key,
 		target: target,
@@ -117,10 +115,12 @@ func NewReadDesireKubernetesController(
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
 			workqueue.DefaultTypedControllerRateLimiter[keys.ReadDesireKey](),
 			workqueue.TypedRateLimitingQueueConfig[keys.ReadDesireKey]{
-				Name: fmt.Sprintf("ReadDesireKubernetesController/%s/%s/%s", key.ClusterName, key.NodePoolName, key.Name),
+				// Underscores rather than slashes: this name surfaces as a
+				// Prometheus label and slashes complicate downstream tooling.
+				Name: fmt.Sprintf("ReadDesireKubernetesController_%s_%s_%s", key.ClusterName, key.NodePoolName, key.Name),
 			},
 		),
-		writer: statuswriter.New[kubeapplier.ReadDesire, keys.ReadDesireKey, *kubeapplier.ReadDesire](
+		writer: desirestatuswriter.New[kubeapplier.ReadDesire, keys.ReadDesireKey, *kubeapplier.ReadDesire](
 			fetcher,
 			&readDesireReplacer{crudByParent: crudByParent},
 		),
@@ -219,9 +219,15 @@ func (c *ReadDesireKubernetesController) processNext(ctx context.Context) bool {
 }
 
 // SyncOnce reads the live object from the per-instance informer cache and
-// updates the ReadDesire's status if its KubeContent differs. If the per-instance
-// informer hasn't synced yet, the call is a no-op — the cache would lie about
-// the target's existence and we'd flap status incorrectly.
+// updates the ReadDesire's status if its KubeContent differs.
+//
+// The HasSynced check below is the same defensive guard kube core controllers
+// use: until the reflector has finished its initial List, GetByKey returns
+// "does not exist" indistinguishably from a real absence. Acting on that
+// would publish a "kube object missing" status for an object that simply
+// hasn't been observed yet. Skipping until HasSynced lets us tell those two
+// cases apart — once true, GetByKey's exists==false really means the object
+// is not there.
 func (c *ReadDesireKubernetesController) SyncOnce(ctx context.Context) error {
 	if !c.informer.HasSynced() {
 		utils.LoggerFromContext(ctx).Info("per-instance informer not yet synced; skipping",
@@ -232,10 +238,10 @@ func (c *ReadDesireKubernetesController) SyncOnce(ctx context.Context) error {
 	}
 
 	desire, err := c.fetcher.Fetch(ctx, c.key)
+	if database.IsNotFoundError(err) {
+		return nil
+	}
 	if err != nil {
-		if database.IsNotFoundError(err) {
-			return nil
-		}
 		return err
 	}
 	if desire == nil {
@@ -244,6 +250,14 @@ func (c *ReadDesireKubernetesController) SyncOnce(ctx context.Context) error {
 
 	// Pull the live object from the per-instance informer cache. The store key
 	// for an Unstructured is namespace/name (or just name for cluster-scoped).
+	//
+	// We read from the informer cache rather than re-Getting against
+	// kube-apiserver so a noisy ReadDesire doesn't load the apiserver. The
+	// cache is fed by an informer scoped to a single (gvr, namespace, name),
+	// so it tracks at most one object. Don't change the resource pointed at
+	// by spec.targetItem out from under a running ReadDesire — but if you do,
+	// the next published .status.kubeContent will reflect what was observed
+	// for the new target.
 	storeKey := c.target.Name
 	if c.namespaced {
 		storeKey = c.target.Namespace + "/" + c.target.Name
@@ -255,6 +269,10 @@ func (c *ReadDesireKubernetesController) SyncOnce(ctx context.Context) error {
 		})
 	}
 
+	// newRaw left nil when exists==false. That nil slice is the signal
+	// for "kube object does not exist" — see the .status.kubeContent
+	// publishing branches below: a nil Raw flips KubeContent.Raw to nil,
+	// which the API contract treats as "absent."
 	var newRaw []byte
 	if exists {
 		obj, ok := rawObj.(*unstructured.Unstructured)
@@ -309,28 +327,31 @@ func (c *ReadDesireKubernetesController) singleObjectListWatch() *cache.ListWatc
 	}
 }
 
-// readDesireFetcher implements statuswriter.Fetcher over a ReadDesireLister.
+// readDesireFetcher implements desirestatuswriter.Fetcher by going to a
+// live Cosmos client per call. See the apply_desire counterpart for why
+// the lister cache is the wrong source here.
 type readDesireFetcher struct {
-	lister listers.ReadDesireLister
+	crudByParent database.KubeApplierReadDesireCRUD
 }
 
-var _ statuswriter.Fetcher[kubeapplier.ReadDesire, keys.ReadDesireKey] = &readDesireFetcher{}
+var _ desirestatuswriter.Fetcher[kubeapplier.ReadDesire, keys.ReadDesireKey] = &readDesireFetcher{}
 
 func (f *readDesireFetcher) Fetch(ctx context.Context, key keys.ReadDesireKey) (*kubeapplier.ReadDesire, error) {
-	if key.IsNodePoolScoped() {
-		return f.lister.GetForNodePool(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.NodePoolName, key.Name)
+	crud, err := f.crudByParent.ReadDesires(key.ResourceParent())
+	if err != nil {
+		return nil, fmt.Errorf("crud for parent %v: %w", key.ResourceParent(), err)
 	}
-	return f.lister.GetForCluster(ctx, key.SubscriptionID, key.ResourceGroupName, key.ClusterName, key.Name)
+	return crud.Get(ctx, key.Name)
 }
 
-// readDesireReplacer implements statuswriter.Replacer over a
+// readDesireReplacer implements desirestatuswriter.Replacer over a
 // KubeApplierReadDesireCRUD. See the apply_desire counterpart for why
 // the parent must be derived per-call instead of fixed at construction.
 type readDesireReplacer struct {
 	crudByParent database.KubeApplierReadDesireCRUD
 }
 
-var _ statuswriter.Replacer[kubeapplier.ReadDesire] = &readDesireReplacer{}
+var _ desirestatuswriter.Replacer[kubeapplier.ReadDesire] = &readDesireReplacer{}
 
 func (r *readDesireReplacer) Replace(ctx context.Context, desired *kubeapplier.ReadDesire) error {
 	key, err := keys.ReadDesireKeyFromResourceID(desired.GetResourceID())
