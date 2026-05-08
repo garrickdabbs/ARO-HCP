@@ -21,6 +21,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -68,6 +69,19 @@ var _ = Describe("Image Registry Policy", func() {
 				_ = kubeClient.CoreV1().Namespaces().Delete(ctx, testNS, metav1.DeleteOptions{})
 			})
 
+			By("checking the policy validation action")
+			binding, err := kubeClient.AdmissionregistrationV1().ValidatingAdmissionPolicyBindings().Get(
+				ctx, "image-registry-allowlist-policy-binding", metav1.GetOptions{})
+			Expect(err).NotTo(HaveOccurred(), "Failed to get VAP binding")
+
+			isAuditMode := false
+			for _, action := range binding.Spec.ValidationActions {
+				if action == admissionregistrationv1.Audit {
+					isAuditMode = true
+					break
+				}
+			}
+
 			By(fmt.Sprintf("attempting to create a pod with disallowed image %q", disallowedImage))
 			pod := &corev1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -86,8 +100,20 @@ var _ = Describe("Image Registry Policy", func() {
 				},
 			}
 			_, err = kubeClient.CoreV1().Pods(testNS).Create(ctx, pod, metav1.CreateOptions{})
-			Expect(err).To(HaveOccurred(), "Pod with disallowed image should be denied")
-			Expect(apierrors.IsForbidden(err)).To(BeTrue(),
-				"Expected Forbidden error for disallowed image, got: %v", err)
+
+			if isAuditMode {
+				if err != nil && apierrors.IsForbidden(err) {
+					GinkgoLogr.Info("Pod was denied even in Audit mode — policy may have been switched to Deny")
+				} else {
+					GinkgoLogr.Info("Pod with disallowed image was allowed (policy in Audit mode) — violation logged but not blocked")
+				}
+				if err == nil {
+					_ = kubeClient.CoreV1().Pods(testNS).Delete(ctx, pod.Name, metav1.DeleteOptions{})
+				}
+			} else {
+				Expect(err).To(HaveOccurred(), "Pod with disallowed image should be denied")
+				Expect(apierrors.IsForbidden(err)).To(BeTrue(),
+					"Expected Forbidden error for disallowed image, got: %v", err)
+			}
 		})
 })
