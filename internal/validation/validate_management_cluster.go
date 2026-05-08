@@ -55,8 +55,8 @@ func validateManagementCluster(ctx context.Context, op operation.Operation, newO
 	// ResourceID (top-level, mirrors CosmosMetadata.ResourceID)
 	errs = append(errs, validate.RequiredPointer(ctx, op, field.NewPath("resourceId"), newObj.ResourceID, safe.Field(oldObj, toManagementClusterResourceID))...)
 	errs = append(errs, immutableByReflect(ctx, op, field.NewPath("resourceId"), newObj.ResourceID, safe.Field(oldObj, toManagementClusterResourceID))...)
-	if newObj.ResourceID != nil {
-		errs = append(errs, MatchesRegex(ctx, op, field.NewPath("resourceId", "name"), &newObj.ResourceID.Name, nil, stampIdentifierRegex, "must be 1-3 lowercase alphanumeric characters")...)
+	if newObj.ResourceID != nil && newObj.ResourceID.Parent != nil {
+		errs = append(errs, MatchesRegex(ctx, op, field.NewPath("resourceId", "parent", "name"), &newObj.ResourceID.Parent.Name, nil, stampIdentifierRegex, "must be 1-3 lowercase alphanumeric characters")...)
 	}
 
 	// Spec

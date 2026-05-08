@@ -1208,7 +1208,6 @@ func TestConvertCSManagementClusterToInternal(t *testing.T) {
 				assert.Equal(t, expectedResourceID.String(), mc.ResourceID.String())
 				assert.Equal(t, mc.ResourceID, mc.CosmosMetadata.ResourceID)
 
-				// Spec — stamp identifier is derived from ResourceID.Name
 				assert.Equal(t, "1", mc.GetStampIdentifier(), "stamp identifier should be suffix after last '-' in AKS cluster name")
 				assert.Equal(t, fleet.ManagementClusterSchedulingPolicySchedulable, mc.Spec.SchedulingPolicy, "active shard should be schedulable")
 

@@ -578,7 +578,7 @@ func (b *Backend) runBackendControllersUnderLeaderElection(ctx context.Context, 
 	)
 	managementClusterSyncController := managementclustercontrollers.NewManagementClusterSyncController(
 		b.options.ClustersServiceClient,
-		b.options.FleetDBClient.ManagementClusters(),
+		b.options.FleetDBClient,
 		managementClusterLister,
 	)
 	placementSyncController := managementclustercontrollers.NewManagementClusterPlacementSyncController(

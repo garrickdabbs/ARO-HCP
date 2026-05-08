@@ -42,8 +42,8 @@ func newTestManagementCluster(name, shardID string) *fleet.ManagementCluster {
 }
 
 func TestSliceManagementClusterLister(t *testing.T) {
-	mc1 := newTestManagementCluster("mc-1", "11111111-1111-1111-1111-111111111111")
-	mc2 := newTestManagementCluster("mc-2", "22222222-2222-2222-2222-222222222222")
+	mc1 := newTestManagementCluster("m1", "11111111-1111-1111-1111-111111111111")
+	mc2 := newTestManagementCluster("m2", "22222222-2222-2222-2222-222222222222")
 
 	lister := &SliceManagementClusterLister{
 		ManagementClusters: []*fleet.ManagementCluster{mc1, mc2},
@@ -58,9 +58,9 @@ func TestSliceManagementClusterLister(t *testing.T) {
 	})
 
 	t.Run("Get returns matching management cluster", func(t *testing.T) {
-		result, err := lister.Get(ctx, "mc-1")
+		result, err := lister.Get(ctx, "m1")
 		require.NoError(t, err)
-		assert.Equal(t, "mc-1", result.ResourceID.Name)
+		assert.Equal(t, "m1", result.ResourceID.Parent.Name)
 	})
 
 	t.Run("Get returns not found for non-existent management cluster", func(t *testing.T) {
@@ -73,7 +73,7 @@ func TestSliceManagementClusterLister(t *testing.T) {
 		csShardID := api.Must(api.NewInternalID("/api/aro_hcp/v1alpha1/provision_shards/11111111-1111-1111-1111-111111111111"))
 		result, err := lister.GetByCSProvisionShardID(ctx, csShardID.ID())
 		require.NoError(t, err)
-		assert.Equal(t, "mc-1", result.ResourceID.Name)
+		assert.Equal(t, "m1", result.ResourceID.Parent.Name)
 	})
 
 	t.Run("GetByCSProvisionShard returns not found for non-existent shard", func(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSliceManagementClusterLister(t *testing.T) {
 	})
 
 	t.Run("GetByCSProvisionShard returns error for duplicate shards", func(t *testing.T) {
-		mc3 := newTestManagementCluster("mc-3", "11111111-1111-1111-1111-111111111111")
+		mc3 := newTestManagementCluster("m3", "11111111-1111-1111-1111-111111111111")
 		dupLister := &SliceManagementClusterLister{
 			ManagementClusters: []*fleet.ManagementCluster{mc1, mc3},
 		}

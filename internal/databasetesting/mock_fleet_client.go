@@ -25,6 +25,7 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api/fleet"
 	"github.com/Azure/ARO-HCP/internal/database"
+	"github.com/Azure/ARO-HCP/internal/validation"
 )
 
 // MockFleetDBClient is the in-memory test double for database.FleetDBClient.
@@ -69,7 +70,11 @@ func (m *MockFleetDBClient) addResource(ctx context.Context, resource any) error
 }
 
 func (m *MockFleetDBClient) addManagementCluster(ctx context.Context, mc *fleet.ManagementCluster) error {
-	crud := newMockManagementClusterCRUD(m, nil)
+	stampIdentifier := mc.GetStampIdentifier()
+	if len(stampIdentifier) == 0 {
+		return fmt.Errorf("management cluster has empty stamp identifier")
+	}
+	crud := m.Fleet(stampIdentifier).ManagementClusters()
 	_, err := crud.Create(ctx, mc, nil)
 	return err
 }
@@ -128,12 +133,38 @@ func (m *MockFleetDBClient) GetAllDocuments() map[string]json.RawMessage {
 
 // --- FleetDBClient implementation ---
 
-func (m *MockFleetDBClient) ManagementClusters() database.ManagementClusterCRUD {
-	return newMockManagementClusterCRUD(m, nil)
+func (m *MockFleetDBClient) Fleet(stampIdentifier string) database.FleetCRUD {
+	return &mockFleetCRUD{
+		store:           m,
+		stampIdentifier: stampIdentifier,
+	}
 }
 
 func (m *MockFleetDBClient) GlobalListers() database.FleetGlobalListers {
 	return &mockFleetGlobalListers{client: m}
+}
+
+// --- FleetCRUD ---
+
+type mockFleetCRUD struct {
+	store           *MockFleetDBClient
+	stampIdentifier string
+}
+
+var _ database.FleetCRUD = &mockFleetCRUD{}
+
+func (k *mockFleetCRUD) ManagementClusters() database.ValidatingResourceCRUD[fleet.ManagementCluster] {
+	parentResourceID, err := fleet.ToFleetResourceID(k.stampIdentifier)
+	if err != nil {
+		panic(fmt.Sprintf("invalid stamp identifier %q: %v", k.stampIdentifier, err))
+	}
+	inner := newMockResourceCRUD[fleet.ManagementCluster, database.GenericDocument[fleet.ManagementCluster]](
+		k.store, parentResourceID, fleet.ManagementClusterResourceType,
+	)
+	return database.NewValidatingCRUD(inner,
+		validation.ValidateManagementClusterCreate,
+		validation.ValidateManagementClusterUpdate,
+	)
 }
 
 // --- FleetGlobalListers ---

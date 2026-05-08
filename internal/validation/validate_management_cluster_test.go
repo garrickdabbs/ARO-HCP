@@ -75,35 +75,35 @@ func TestValidateManagementClusterCreate(t *testing.T) {
 				{fieldPath: "resourceId", message: "Required"},
 			},
 		},
-		// Stamp identifier (resourceId.name) — must be 1-3 lowercase alphanumeric
+		// Stamp identifier (resourceId.parent.name) — must be 1-3 lowercase alphanumeric
 		{
 			name: "stamp identifier with uppercase rejected",
 			modify: func(t *testing.T, mc *fleet.ManagementCluster) {
-				mc.ResourceID = api.Must(azcorearm.ParseResourceID("/providers/Microsoft.RedHatOpenShiftManagement/hcpManagementClusters/ABC"))
+				mc.ResourceID = api.Must(azcorearm.ParseResourceID("/providers/Microsoft.RedHatOpenShift/fleet/ABC/managementCluster/default"))
 				mc.CosmosMetadata.ResourceID = mc.ResourceID
 			},
 			expectErrors: []expectedError{
-				{fieldPath: "resourceId.name", message: "must be 1-3 lowercase alphanumeric characters"},
+				{fieldPath: "resourceId.parent.name", message: "must be 1-3 lowercase alphanumeric characters"},
 			},
 		},
 		{
 			name: "stamp identifier too long rejected",
 			modify: func(t *testing.T, mc *fleet.ManagementCluster) {
-				mc.ResourceID = api.Must(azcorearm.ParseResourceID("/providers/Microsoft.RedHatOpenShiftManagement/hcpManagementClusters/abcd"))
+				mc.ResourceID = api.Must(azcorearm.ParseResourceID("/providers/Microsoft.RedHatOpenShift/fleet/abcd/managementCluster/default"))
 				mc.CosmosMetadata.ResourceID = mc.ResourceID
 			},
 			expectErrors: []expectedError{
-				{fieldPath: "resourceId.name", message: "must be 1-3 lowercase alphanumeric characters"},
+				{fieldPath: "resourceId.parent.name", message: "must be 1-3 lowercase alphanumeric characters"},
 			},
 		},
 		{
 			name: "stamp identifier with special chars rejected",
 			modify: func(t *testing.T, mc *fleet.ManagementCluster) {
-				mc.ResourceID = api.Must(azcorearm.ParseResourceID("/providers/Microsoft.RedHatOpenShiftManagement/hcpManagementClusters/a-b"))
+				mc.ResourceID = api.Must(azcorearm.ParseResourceID("/providers/Microsoft.RedHatOpenShift/fleet/a-b/managementCluster/default"))
 				mc.CosmosMetadata.ResourceID = mc.ResourceID
 			},
 			expectErrors: []expectedError{
-				{fieldPath: "resourceId.name", message: "must be 1-3 lowercase alphanumeric characters"},
+				{fieldPath: "resourceId.parent.name", message: "must be 1-3 lowercase alphanumeric characters"},
 			},
 		},
 		{

@@ -45,7 +45,7 @@ const (
 	testClusterName           = "test-cluster"
 	testClusterServiceIDStr   = "/api/clusters_mgmt/v1/clusters/abc123"
 	testProvisionShardIDStr   = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
-	testMgmtClusterName       = "mgmt-cluster-1"
+	testMgmtClusterName       = "mc1"
 )
 
 func testClusterResourceID() *azcorearm.ResourceID {
@@ -242,7 +242,7 @@ func TestManagementClusterPlacementSyncer_SyncOnce(t *testing.T) {
 				newTestManagementCluster(),
 				func() *fleet.ManagementCluster {
 					mc := newTestManagementCluster()
-					mc.ResourceID = api.Must(fleet.ToManagementClusterResourceID("mgmt-cluster-2"))
+					mc.ResourceID = api.Must(fleet.ToManagementClusterResourceID("mc2"))
 					return mc
 				}(),
 			},

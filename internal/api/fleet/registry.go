@@ -21,9 +21,13 @@ import (
 )
 
 const (
-	ManagementClusterResourceTypeName = "hcpManagementClusters"
+	FleetResourceTypeName = "fleet"
+
+	ManagementClusterResourceTypeName = "managementClusters"
+	ManagementClusterResourceName     = "default"
 )
 
 var (
-	ManagementClusterResourceType = azcorearm.NewResourceType(api.ProviderNamespace, ManagementClusterResourceTypeName)
+	FleetResourceType             = azcorearm.NewResourceType(api.ProviderNamespace, FleetResourceTypeName)
+	ManagementClusterResourceType = azcorearm.NewResourceType(api.ProviderNamespace, FleetResourceTypeName+"/"+ManagementClusterResourceTypeName)
 )

@@ -21,4 +21,9 @@ type FleetPartitionKeyAccessor interface {
 	GetStampIdentifier() string
 }
 
-func (mc *ManagementCluster) GetStampIdentifier() string { return mc.CosmosMetadata.ResourceID.Name }
+func (mc *ManagementCluster) GetStampIdentifier() string {
+	if mc.CosmosMetadata.ResourceID == nil || mc.CosmosMetadata.ResourceID.Parent == nil {
+		return ""
+	}
+	return mc.CosmosMetadata.ResourceID.Parent.Name
+}

@@ -19,17 +19,24 @@ import (
 
 	"github.com/Azure/ARO-HCP/internal/api/fleet"
 	"github.com/Azure/ARO-HCP/internal/utils"
+	"github.com/Azure/ARO-HCP/internal/validation"
 )
 
 const fleetContainer = "Fleet"
 
-// FleetDBClient is the database surface for the fleet Cosmos container.
-// It is intentionally separate from DBClient because the fleet container
-// holds management cluster inventory data with its own access patterns
-// and credential scoping.
+// FleetDBClient is the database surface for the Fleet Cosmos container.
+// It is intentionally separate from ResourcesDBClient because the Fleet
+// container holds management cluster inventory data with its own access
+// patterns and credential scoping.
 type FleetDBClient interface {
-	ManagementClusters() ManagementClusterCRUD
+	Fleet(stampIdentifier string) FleetCRUD
 	GlobalListers() FleetGlobalListers
+}
+
+// FleetCRUD scopes ResourceCRUD accessors to a single fleet partition (stamp).
+// Constructed from FleetDBClient.Fleet(stampIdentifier).
+type FleetCRUD interface {
+	ManagementClusters() ValidatingResourceCRUD[fleet.ManagementCluster]
 }
 
 // FleetGlobalListers provides cross-partition listers for fleet resource types.
@@ -44,7 +51,6 @@ type cosmosFleetDBClient struct {
 var _ FleetDBClient = &cosmosFleetDBClient{}
 
 // NewFleetDBClient instantiates a FleetDBClient from a Cosmos DatabaseClient.
-// It opens only the fleet container.
 func NewFleetDBClient(database *azcosmos.DatabaseClient) (FleetDBClient, error) {
 	container, err := database.NewContainer(fleetContainer)
 	if err != nil {
@@ -58,12 +64,33 @@ func NewFleetDBClientFromContainer(container *azcosmos.ContainerClient) FleetDBC
 	return &cosmosFleetDBClient{container: container}
 }
 
-func (c *cosmosFleetDBClient) ManagementClusters() ManagementClusterCRUD {
-	return NewManagementClusterCRUD(c.container)
+func (c *cosmosFleetDBClient) Fleet(stampIdentifier string) FleetCRUD {
+	return &cosmosFleetCRUD{
+		containerClient: c.container,
+		stampIdentifier: stampIdentifier,
+	}
 }
 
 func (c *cosmosFleetDBClient) GlobalListers() FleetGlobalListers {
 	return &cosmosFleetGlobalListers{container: c.container}
+}
+
+// cosmosFleetCRUD implements FleetCRUD against a Cosmos container.
+type cosmosFleetCRUD struct {
+	containerClient *azcosmos.ContainerClient
+	stampIdentifier string
+}
+
+var _ FleetCRUD = &cosmosFleetCRUD{}
+
+func (k *cosmosFleetCRUD) ManagementClusters() ValidatingResourceCRUD[fleet.ManagementCluster] {
+	inner := newFleetResourceCRUD[fleet.ManagementCluster, GenericDocument[fleet.ManagementCluster]](
+		k.containerClient, k.stampIdentifier, fleet.ManagementClusterResourceType,
+	)
+	return NewValidatingCRUD(inner,
+		validation.ValidateManagementClusterCreate,
+		validation.ValidateManagementClusterUpdate,
+	)
 }
 
 type cosmosFleetGlobalListers struct {

@@ -77,7 +77,7 @@ func fleetPartitionKey[InternalAPIType any](newObj *InternalAPIType) (string, er
 	return pk, nil
 }
 
-func createFleet[InternalAPIType, CosmosAPIType any](
+func createFleetItem[InternalAPIType, CosmosAPIType any](
 	ctx context.Context,
 	containerClient *azcosmos.ContainerClient,
 	partitionKeyString string,
@@ -115,7 +115,7 @@ func createFleet[InternalAPIType, CosmosAPIType any](
 	return responseItemToInternalObj[InternalAPIType, CosmosAPIType](ctx, cosmosMetadata.GetCosmosUID(), responseItem)
 }
 
-func replaceFleet[InternalAPIType, CosmosAPIType any](
+func replaceFleetItem[InternalAPIType, CosmosAPIType any](
 	ctx context.Context,
 	containerClient *azcosmos.ContainerClient,
 	partitionKeyString string,
@@ -156,4 +156,96 @@ func replaceFleet[InternalAPIType, CosmosAPIType any](
 	}
 
 	return responseItemToInternalObj[InternalAPIType, CosmosAPIType](ctx, cosmosMetadata.GetCosmosUID(), responseItem)
+}
+
+func addFleetCreateToTransaction[InternalAPIType, CosmosAPIType any](
+	ctx context.Context,
+	transaction DBTransaction,
+	newObj *InternalAPIType,
+	opts *azcosmos.TransactionalBatchItemOptions,
+) (string, error) {
+	partitionKeyString := transaction.GetPartitionKey()
+	if strings.ToLower(partitionKeyString) != partitionKeyString {
+		return "", fmt.Errorf("partitionKeyString must be lowercase, not: %q", partitionKeyString)
+	}
+	cosmosMetadata, data, err := serializeFleetItem[InternalAPIType, CosmosAPIType](newObj)
+	if err != nil {
+		return "", err
+	}
+	objPK, err := fleetPartitionKey(newObj)
+	if err != nil {
+		return "", err
+	}
+	if partitionKeyString != objPK {
+		return "", fmt.Errorf(
+			"item stamp identifier does not match partition key: %q vs %q",
+			objPK, partitionKeyString,
+		)
+	}
+	transactionDetails := CosmosDBTransactionStepDetails{
+		ActionType: "Create",
+		GoType:     fmt.Sprintf("%T", newObj),
+		CosmosID:   cosmosMetadata.GetCosmosUID(),
+		ResourceID: cosmosMetadata.ResourceID.String(),
+	}
+
+	transaction.AddStep(
+		transactionDetails,
+		func(b *azcosmos.TransactionalBatch) (string, error) {
+			b.CreateItem(data, opts)
+			return cosmosMetadata.GetCosmosUID(), nil
+		},
+	)
+
+	return cosmosMetadata.GetCosmosUID(), nil
+}
+
+func addFleetReplaceToTransaction[InternalAPIType, CosmosAPIType any](
+	ctx context.Context,
+	transaction DBTransaction,
+	newObj *InternalAPIType,
+	opts *azcosmos.TransactionalBatchItemOptions,
+) (string, error) {
+	partitionKeyString := transaction.GetPartitionKey()
+	if strings.ToLower(partitionKeyString) != partitionKeyString {
+		return "", fmt.Errorf("partitionKeyString must be lowercase, not: %q", partitionKeyString)
+	}
+	cosmosMetadata, data, err := serializeFleetItem[InternalAPIType, CosmosAPIType](newObj)
+	if err != nil {
+		return "", err
+	}
+	objPK, err := fleetPartitionKey(newObj)
+	if err != nil {
+		return "", err
+	}
+	if partitionKeyString != objPK {
+		return "", fmt.Errorf(
+			"item stamp identifier does not match partition key: %q vs %q",
+			objPK, partitionKeyString,
+		)
+	}
+	transactionDetails := CosmosDBTransactionStepDetails{
+		ActionType: "Replace",
+		GoType:     fmt.Sprintf("%T", newObj),
+		CosmosID:   cosmosMetadata.GetCosmosUID(),
+		ResourceID: cosmosMetadata.ResourceID.String(),
+		Etag:       cosmosMetadata.CosmosETag,
+	}
+
+	if opts == nil {
+		opts = &azcosmos.TransactionalBatchItemOptions{}
+	}
+	if len(cosmosMetadata.CosmosETag) > 0 {
+		opts.IfMatchETag = &cosmosMetadata.CosmosETag
+	}
+
+	transaction.AddStep(
+		transactionDetails,
+		func(b *azcosmos.TransactionalBatch) (string, error) {
+			b.ReplaceItem(cosmosMetadata.GetCosmosUID(), data, opts)
+			return cosmosMetadata.GetCosmosUID(), nil
+		},
+	)
+
+	return cosmosMetadata.GetCosmosUID(), nil
 }

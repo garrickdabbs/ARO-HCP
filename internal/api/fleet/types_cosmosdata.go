@@ -21,16 +21,31 @@ import (
 	azcorearm "github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
 )
 
-// ToManagementClusterResourceID constructs a provider-level resource ID for a
-// management cluster keyed by stamp identifier.
+// ToFleetResourceID constructs the parent scope resource ID for a fleet
+// partition: /providers/Microsoft.RedHatOpenShift/fleet/{stampIdentifier}
+func ToFleetResourceID(stampIdentifier string) (*azcorearm.ResourceID, error) {
+	return azcorearm.ParseResourceID(ToFleetResourceIDString(stampIdentifier))
+}
+
+// ToFleetResourceIDString returns the lowercased fleet parent scope resource ID.
+func ToFleetResourceIDString(stampIdentifier string) string {
+	return strings.ToLower(path.Join(
+		"/providers", FleetResourceType.String(), stampIdentifier,
+	))
+}
+
+// ToManagementClusterResourceID constructs the full resource ID for a
+// management cluster singleton within a fleet partition:
+// /providers/Microsoft.RedHatOpenShift/fleet/{stampIdentifier}/managementCluster/default
 func ToManagementClusterResourceID(stampIdentifier string) (*azcorearm.ResourceID, error) {
 	return azcorearm.ParseResourceID(ToManagementClusterResourceIDString(stampIdentifier))
 }
 
-// ToManagementClusterResourceIDString returns the lowercased provider-level
-// resource ID string for a management cluster.
+// ToManagementClusterResourceIDString returns the lowercased resource ID string
+// for a management cluster singleton.
 func ToManagementClusterResourceIDString(stampIdentifier string) string {
 	return strings.ToLower(path.Join(
-		"/providers", ManagementClusterResourceType.String(), stampIdentifier,
+		"/providers", FleetResourceType.String(), stampIdentifier,
+		ManagementClusterResourceTypeName, ManagementClusterResourceName,
 	))
 }

@@ -43,7 +43,7 @@ type managementClusterSyncController struct {
 	name string
 
 	clusterServiceClient    ocm.ClusterServiceClientSpec
-	managementClusterCRUD   database.ManagementClusterCRUD
+	fleetDBClient           database.FleetDBClient
 	managementClusterLister dblisters.ManagementClusterLister
 
 	resyncDuration time.Duration
@@ -54,13 +54,13 @@ type managementClusterSyncController struct {
 // all management clusters from Cluster Service and upserts them into CosmosDB.
 func NewManagementClusterSyncController(
 	clusterServiceClient ocm.ClusterServiceClientSpec,
-	managementClusterCRUD database.ManagementClusterCRUD,
+	fleetDBClient database.FleetDBClient,
 	managementClusterLister dblisters.ManagementClusterLister,
 ) controllerutils.Controller {
 	return &managementClusterSyncController{
 		name:                    controllerName,
 		clusterServiceClient:    clusterServiceClient,
-		managementClusterCRUD:   managementClusterCRUD,
+		fleetDBClient:           fleetDBClient,
 		managementClusterLister: managementClusterLister,
 		resyncDuration:          30 * time.Minute,
 		queue: workqueue.NewTypedRateLimitingQueueWithConfig(
@@ -115,6 +115,7 @@ func (c *managementClusterSyncController) syncProvisionShard(ctx context.Context
 	}
 
 	stampIdentifier := convertedManagementCluster.GetStampIdentifier()
+	managementClusterCRUD := c.fleetDBClient.Fleet(stampIdentifier).ManagementClusters()
 
 	existing, err := c.managementClusterLister.Get(ctx, stampIdentifier)
 	if err != nil && !database.IsNotFoundError(err) {
@@ -122,7 +123,7 @@ func (c *managementClusterSyncController) syncProvisionShard(ctx context.Context
 	}
 
 	if database.IsNotFoundError(err) {
-		created, err := c.managementClusterCRUD.Create(ctx, convertedManagementCluster, nil)
+		created, err := managementClusterCRUD.Create(ctx, convertedManagementCluster, nil)
 		if err != nil {
 			return fmt.Errorf("management cluster %s: %w", convertedManagementCluster.ResourceID, err)
 		}
@@ -145,7 +146,7 @@ func (c *managementClusterSyncController) syncProvisionShard(ctx context.Context
 		logger.V(1).Info("management cluster unchanged, skipping update")
 		return nil
 	}
-	if _, err = c.managementClusterCRUD.Replace(ctx, managementClusterToWrite, existing, nil); err != nil {
+	if _, err = managementClusterCRUD.Replace(ctx, managementClusterToWrite, existing, nil); err != nil {
 		return fmt.Errorf("management cluster %s: %w", existing.ResourceID, err)
 	}
 	logger.Info("updated management cluster")
