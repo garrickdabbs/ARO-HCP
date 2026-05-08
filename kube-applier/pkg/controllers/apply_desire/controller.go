@@ -14,11 +14,12 @@
 
 // Package apply_desire implements the ApplyDesireController.
 //
-// On every sync the controller reads the named ApplyDesire from its lister,
-// decodes spec.kubeContent into an unstructured object, resolves the GVR via
-// the supplied RESTMapper, and issues a server-side-apply with Force=true and
-// FieldManager="kube-applier" via the dynamic client. The outcome is recorded
-// on .status.conditions["Successful"] and persisted via the StatusWriter.
+// On every sync the controller reads the named ApplyDesire from a live
+// Cosmos client, decodes spec.kubeContent into an unstructured object, and
+// issues a server-side-apply with Force=true and FieldManager from this
+// package's FieldManager const via the dynamic client. The outcome is
+// recorded on .status.conditions["Successful"] / ["Degraded"] and persisted
+// via the StatusWriter.
 package apply_desire
 
 import (
@@ -36,8 +37,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+	utilsclock "k8s.io/utils/clock"
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
+	"github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
@@ -52,14 +55,61 @@ import (
 // is the owner, distinct from any native Kubernetes "kube-..." manager.
 const FieldManager = "aro-hcp-kube-applier"
 
+// DefaultCooldownPeriod is the minimum interval between two reconciles
+// of an unchanged ApplyDesire. The informer's handler resync fires
+// frequently (at the informer's check period); the cooldown gate is what
+// turns that into a slow re-reconcile. 10 minutes matches the bot
+// directive on PR #5076: "resync without change relatively slow (say 10
+// minutes on a resync)".
+//
+// Real content changes — Add events and Update events with a different
+// Cosmos etag — bypass this gate so users see their content reflected fast.
+const DefaultCooldownPeriod = 10 * time.Minute
+
+// Config tunes the ApplyDesireController's cooldown behavior. Zero-valued
+// fields take the Default* constants below; tests pass shorter durations
+// and a fake clock.
+type Config struct {
+	// CooldownPeriod is the minimum time between two reconciles of an
+	// unchanged desire. See DefaultCooldownPeriod for the rationale.
+	CooldownPeriod time.Duration
+	// Clock is the time source used by the cooldown gate. nil =
+	// utilsclock.RealClock{}.
+	Clock utilsclock.PassiveClock
+}
+
+func (c Config) withDefaults() Config {
+	if c.CooldownPeriod == 0 {
+		c.CooldownPeriod = DefaultCooldownPeriod
+	}
+	if c.Clock == nil {
+		c.Clock = utilsclock.RealClock{}
+	}
+	return c
+}
+
 // ApplyDesireController reconciles ApplyDesires by SSA-applying spec.kubeContent.
+//
+// Reconcile cadence (mirrors backend's GenericWatchingController):
+//
+//   - Add events queue immediately.
+//   - Update events whose Cosmos etag differs from the previous version
+//     queue immediately. Etag-unchanged updates (informer resyncs, or our
+//     own status writes feeding back) are routed through the cooldown gate.
+//   - The cooldown gate (controllerutils.TimeBasedCooldownChecker) lets each key through
+//     at most once per CooldownPeriod, so unchanged desires reconcile on
+//     a slow cadence regardless of how often the informer resyncs.
+//   - On error the workqueue's rate limiter requeues the key with backoff.
 type ApplyDesireController struct {
 	name                string
 	applyDesireInformer cache.SharedIndexInformer
-	fetcher             *applyDesireFetcher
+	fetcher             desirestatuswriter.Fetcher[kubeapplier.ApplyDesire, keys.ApplyDesireKey]
 	dyn                 dynamic.Interface
 	writer              desirestatuswriter.StatusWriter[kubeapplier.ApplyDesire, keys.ApplyDesireKey]
 	queue               workqueue.TypedRateLimitingInterface[keys.ApplyDesireKey]
+
+	cfg      Config
+	cooldown controllerutils.CooldownChecker
 }
 
 // NewApplyDesireController wires up the informer event handler and returns a
@@ -69,12 +119,19 @@ type ApplyDesireController struct {
 // crudByParent provides a parent-scoped ResourceCRUD per ApplyDesire so
 // status replaces can be issued under the desire's own cluster/nodepool
 // resource ID rather than a sentinel parent.
+//
+// cfg's zero values get the Default* constants. Production callers may pass
+// Config{} directly; tests substitute shorter durations and a fake clock.
 func NewApplyDesireController(
 	applyDesireInformer cache.SharedIndexInformer,
 	dyn dynamic.Interface,
 	crudByParent database.KubeApplierApplyDesireCRUD,
+	cfg Config,
 ) (*ApplyDesireController, error) {
+	cfg = cfg.withDefaults()
 	fetcher := &applyDesireFetcher{crudByParent: crudByParent}
+	cooldownChecker := controllerutils.NewTimeBasedCooldownChecker(cfg.CooldownPeriod)
+	cooldownChecker.SetClock(cfg.Clock)
 	c := &ApplyDesireController{
 		name:                "ApplyDesireController",
 		applyDesireInformer: applyDesireInformer,
@@ -88,14 +145,16 @@ func NewApplyDesireController(
 			workqueue.DefaultTypedControllerRateLimiter[keys.ApplyDesireKey](),
 			workqueue.TypedRateLimitingQueueConfig[keys.ApplyDesireKey]{Name: "ApplyDesireController"},
 		),
+		cfg:      cfg,
+		cooldown: cooldownChecker,
 	}
 
 	// Register the event handler at construction so events are delivered to
 	// the queue before the informer starts pumping. Adding it inside Run()
 	// races with the initial sync.
 	if _, err := applyDesireInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { c.enqueue(obj) },
-		UpdateFunc: func(_, obj any) { c.enqueue(obj) },
+		AddFunc:    func(obj any) { c.handleAdd(obj) },
+		UpdateFunc: func(oldObj, newObj any) { c.handleUpdate(oldObj, newObj) },
 	}); err != nil {
 		return nil, fmt.Errorf("register informer handler: %w", err)
 	}
@@ -103,6 +162,11 @@ func NewApplyDesireController(
 }
 
 // Run starts threadiness workers. It returns when ctx is cancelled.
+//
+// There is no separate poll goroutine: the informer's handler resync
+// (configured via the informer factory's ResyncPeriod) fires periodic
+// Update events for every cached desire, and handleUpdate routes those
+// through the cooldown gate.
 func (c *ApplyDesireController) Run(ctx context.Context, threadiness int) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
@@ -119,16 +183,61 @@ func (c *ApplyDesireController) Run(ctx context.Context, threadiness int) {
 	<-ctx.Done()
 }
 
-func (c *ApplyDesireController) enqueue(obj any) {
+// handleAdd queues every observed Add unconditionally. A new ApplyDesire
+// has never been reconciled, so the cooldown gate has nothing to compare
+// against; treat Adds the same way the backend's GenericWatchingController
+// does — as "changed" and immediate.
+func (c *ApplyDesireController) handleAdd(obj any) {
 	d, ok := obj.(*kubeapplier.ApplyDesire)
 	if !ok {
 		return
 	}
+	c.enqueue(d)
+}
+
+// handleUpdate queues immediately when the Cosmos etag differs (real
+// content change) and consults the cooldown gate when it doesn't (informer
+// resync or our own status-write feedback). Etag is the right signal for
+// "changed" because Cosmos bumps it on every persisted mutation, including
+// the status writes the controller itself produces — those still re-trigger
+// reconcile (we want to see Successful conditions converge), but only at
+// cooldown cadence, not in a tight feedback loop.
+func (c *ApplyDesireController) handleUpdate(oldObj, newObj any) {
+	oldD, oldOK := oldObj.(*kubeapplier.ApplyDesire)
+	newD, newOK := newObj.(*kubeapplier.ApplyDesire)
+	if !oldOK || !newOK {
+		return
+	}
+	changed := oldD.GetEtag() != newD.GetEtag()
+	c.enqueueWithCooldown(newD, changed)
+}
+
+// enqueue is the unconditional path used for Add events.
+func (c *ApplyDesireController) enqueue(d *kubeapplier.ApplyDesire) {
 	key, err := keys.ApplyDesireKeyFromResourceID(d.GetResourceID())
 	if err != nil {
 		// Should not happen for a desire produced by our own informers, but
 		// don't poison the queue if it does.
 		utilruntime.HandleError(err)
+		return
+	}
+	c.queue.Add(key)
+}
+
+// enqueueWithCooldown queues unconditionally on changed=true and consults
+// the cooldown gate otherwise. A cooldown rejection is silent; the next
+// resync (or a real change) will get its turn.
+func (c *ApplyDesireController) enqueueWithCooldown(d *kubeapplier.ApplyDesire, changed bool) {
+	key, err := keys.ApplyDesireKeyFromResourceID(d.GetResourceID())
+	if err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	if changed {
+		c.queue.Add(key)
+		return
+	}
+	if !c.cooldown.CanSync(context.TODO(), key) {
 		return
 	}
 	c.queue.Add(key)

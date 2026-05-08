@@ -239,11 +239,11 @@ func startControllers(parent context.Context, t *testing.T, kac database.KubeApp
 	deleteInformer := informers.NewDeleteDesireInformerWithRelistDuration(partitionListers.DeleteDesires(), fastRelist)
 	readInformer := informers.NewReadDesireInformerWithRelistDuration(partitionListers.ReadDesires(), fastRelist)
 
-	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, dyn, kubeApplierCRUD)
+	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, dyn, kubeApplierCRUD, apply_desire.Config{})
 	require.NoError(t, err)
-	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, dyn, kubeApplierCRUD)
+	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, dyn, kubeApplierCRUD, delete_desire.Config{})
 	require.NoError(t, err)
-	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, dyn, kubeApplierCRUD)
+	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, dyn, kubeApplierCRUD, read_desire_manager.Config{})
 	require.NoError(t, err)
 
 	wg := &sync.WaitGroup{}

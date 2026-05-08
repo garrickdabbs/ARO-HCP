@@ -31,8 +31,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+	utilsclock "k8s.io/utils/clock"
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
@@ -40,6 +42,39 @@ import (
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/read_desire_kubernetes"
 )
+
+// DefaultCooldownPeriod is the minimum interval between two reconciles of a
+// ReadDesire whose Cosmos etag has not changed. The manager's per-key
+// reconcile is bookkeeping (start/stop of the per-instance kube reflector),
+// so the periodic re-check is much less time-sensitive than apply or delete;
+// 10 minutes matches apply_desire's default and avoids needless churn on the
+// per-instance controllers.
+//
+// Real content changes (Add events, Update events with a different etag,
+// and Delete events) bypass this gate so per-instance controllers are
+// (re)launched or stopped promptly.
+const DefaultCooldownPeriod = 10 * time.Minute
+
+// Config tunes the manager's cooldown behavior. Zero-valued fields take the
+// Default* constants; tests pass shorter durations and a fake clock.
+type Config struct {
+	// CooldownPeriod gates re-reconciles for a desire whose Cosmos etag has
+	// not changed. See DefaultCooldownPeriod.
+	CooldownPeriod time.Duration
+	// Clock is the time source used by the cooldown gate. nil =
+	// utilsclock.RealClock{}.
+	Clock utilsclock.PassiveClock
+}
+
+func (c Config) withDefaults() Config {
+	if c.CooldownPeriod == 0 {
+		c.CooldownPeriod = DefaultCooldownPeriod
+	}
+	if c.Clock == nil {
+		c.Clock = utilsclock.RealClock{}
+	}
+	return c
+}
 
 // PerInstanceController abstracts the per-ReadDesire kube reflector so the
 // manager can be tested with a fake.
@@ -56,12 +91,25 @@ type PerInstanceFactory interface {
 
 // ReadDesireInformerManagingController watches ReadDesires and manages the
 // per-instance kubernetes reflectors.
+//
+// Reconcile cadence (mirrors apply_desire and backend's GenericWatchingController):
+//
+//   - Add events queue immediately.
+//   - Update events whose Cosmos etag differs from the previous version queue
+//     immediately. Etag-unchanged updates (informer resyncs, or our own
+//     status writes feeding back) are routed through the cooldown gate.
+//   - Delete events queue immediately so the per-instance controller stops
+//     promptly when a ReadDesire is removed from Cosmos.
+//   - On error the workqueue's rate limiter requeues the key with backoff.
 type ReadDesireInformerManagingController struct {
 	readDesireInformer cache.SharedIndexInformer
 	fetcher            *readDesireFetcher
 	factory            PerInstanceFactory
 	writer             desirestatuswriter.StatusWriter[kubeapplier.ReadDesire, keys.ReadDesireKey]
 	queue              workqueue.TypedRateLimitingInterface[keys.ReadDesireKey]
+
+	cfg      Config
+	cooldown controllerutil.CooldownChecker
 
 	// running tracks the live per-instance ReadDesireKubernetesController for
 	// each ReadDesire by its key. The map is mutated only under mu. SyncOnce
@@ -85,12 +133,19 @@ type runningInstance struct {
 // replaces — both the manager's own WatchStarted updates and those of every
 // per-instance controller it spawns — can be issued under each desire's own
 // cluster/nodepool resource ID rather than a sentinel parent.
+//
+// cfg's zero values get the Default* constants. Production callers may pass
+// Config{} directly; tests substitute shorter durations and a fake clock.
 func NewReadDesireInformerManagingController(
 	readDesireInformer cache.SharedIndexInformer,
 	dyn dynamic.Interface,
 	crudByParent database.KubeApplierReadDesireCRUD,
+	cfg Config,
 ) (*ReadDesireInformerManagingController, error) {
+	cfg = cfg.withDefaults()
 	fetcher := &readDesireFetcher{crudByParent: crudByParent}
+	cooldownChecker := controllerutil.NewTimeBasedCooldownChecker(cfg.CooldownPeriod)
+	cooldownChecker.SetClock(cfg.Clock)
 	c := &ReadDesireInformerManagingController{
 		readDesireInformer: readDesireInformer,
 		fetcher:            fetcher,
@@ -103,13 +158,15 @@ func NewReadDesireInformerManagingController(
 			fetcher,
 			&readDesireReplacer{crudByParent: crudByParent},
 		),
-		running: map[keys.ReadDesireKey]*runningInstance{},
+		cfg:      cfg,
+		cooldown: cooldownChecker,
+		running:  map[keys.ReadDesireKey]*runningInstance{},
 	}
 
 	if _, err := readDesireInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { c.enqueue(obj) },
-		UpdateFunc: func(_, obj any) { c.enqueue(obj) },
-		DeleteFunc: func(obj any) { c.enqueue(obj) },
+		AddFunc:    func(obj any) { c.handleAdd(obj) },
+		UpdateFunc: func(oldObj, newObj any) { c.handleUpdate(oldObj, newObj) },
+		DeleteFunc: func(obj any) { c.handleDelete(obj) },
 	}); err != nil {
 		return nil, fmt.Errorf("register informer handler: %w", err)
 	}
@@ -157,19 +214,61 @@ func (c *ReadDesireInformerManagingController) Run(ctx context.Context, threadin
 	<-ctx.Done()
 }
 
-func (c *ReadDesireInformerManagingController) enqueue(obj any) {
+// handleAdd queues every observed Add unconditionally — a new ReadDesire
+// has never been reconciled, so the cooldown gate has nothing to compare
+// against.
+func (c *ReadDesireInformerManagingController) handleAdd(obj any) {
 	d, ok := obj.(*kubeapplier.ReadDesire)
 	if !ok {
-		// DeleteFinalStateUnknown wraps the real object on cache eviction.
+		return
+	}
+	c.enqueue(d)
+}
+
+// handleUpdate queues immediately when the Cosmos etag differs — that is
+// the signal that something the manager cares about (TargetItem, Spec, or
+// our own status write) actually moved. Etag-unchanged updates are
+// informer resyncs of an already-running instance: route them through the
+// cooldown gate so we don't churn through bookkeeping for nothing.
+func (c *ReadDesireInformerManagingController) handleUpdate(oldObj, newObj any) {
+	oldD, oldOK := oldObj.(*kubeapplier.ReadDesire)
+	newD, newOK := newObj.(*kubeapplier.ReadDesire)
+	if !oldOK || !newOK {
+		return
+	}
+	if oldD.GetEtag() != newD.GetEtag() {
+		c.enqueue(newD)
+		return
+	}
+	key, err := keys.ReadDesireKeyFromResourceID(newD.GetResourceID())
+	if err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	if !c.cooldown.CanSync(context.TODO(), key) {
+		return
+	}
+	c.queue.Add(key)
+}
+
+// handleDelete queues every observed Delete unconditionally so the
+// per-instance controller stops promptly. The DeleteFinalStateUnknown
+// wrapper appears when the cache evicted the object before delivery, and
+// we still want to drive a stop in that case.
+func (c *ReadDesireInformerManagingController) handleDelete(obj any) {
+	d, ok := obj.(*kubeapplier.ReadDesire)
+	if !ok {
 		if t, ok := obj.(cache.DeletedFinalStateUnknown); ok {
-			if d2, ok := t.Obj.(*kubeapplier.ReadDesire); ok {
-				d = d2
-			}
+			d, _ = t.Obj.(*kubeapplier.ReadDesire)
 		}
 	}
 	if d == nil {
 		return
 	}
+	c.enqueue(d)
+}
+
+func (c *ReadDesireInformerManagingController) enqueue(d *kubeapplier.ReadDesire) {
 	key, err := keys.ReadDesireKeyFromResourceID(d.GetResourceID())
 	if err != nil {
 		utilruntime.HandleError(err)

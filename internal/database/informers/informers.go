@@ -86,7 +86,12 @@ func NewApplyDesireInformerWithRelistDuration(
 		&listWatchWithoutWatchListSemantics{lw},
 		&kubeapplier.ApplyDesire{},
 		cache.SharedIndexInformerOptions{
-			ResyncPeriod: 1 * time.Hour,
+			// ResyncPeriod doubles as the informer's resync check period:
+			// per-handler resyncs cannot fire faster than this. Tying it to
+			// relistDuration keeps "how often the informer re-checks Cosmos"
+			// aligned with "how often handlers can be resynced," which is
+			// what kube-applier's cooldown-gated controllers want.
+			ResyncPeriod: relistDuration,
 			Indexers:     desireIndexers(),
 		},
 	)
@@ -131,7 +136,12 @@ func NewDeleteDesireInformerWithRelistDuration(
 		&listWatchWithoutWatchListSemantics{lw},
 		&kubeapplier.DeleteDesire{},
 		cache.SharedIndexInformerOptions{
-			ResyncPeriod: 1 * time.Hour,
+			// ResyncPeriod doubles as the informer's resync check period:
+			// per-handler resyncs cannot fire faster than this. Tying it to
+			// relistDuration keeps "how often the informer re-checks Cosmos"
+			// aligned with "how often handlers can be resynced," which is
+			// what kube-applier's cooldown-gated controllers want.
+			ResyncPeriod: relistDuration,
 			Indexers:     desireIndexers(),
 		},
 	)
@@ -176,7 +186,12 @@ func NewReadDesireInformerWithRelistDuration(
 		&listWatchWithoutWatchListSemantics{lw},
 		&kubeapplier.ReadDesire{},
 		cache.SharedIndexInformerOptions{
-			ResyncPeriod: 1 * time.Hour,
+			// ResyncPeriod doubles as the informer's resync check period:
+			// per-handler resyncs cannot fire faster than this. Tying it to
+			// relistDuration keeps "how often the informer re-checks Cosmos"
+			// aligned with "how often handlers can be resynced," which is
+			// what kube-applier's cooldown-gated controllers want.
+			ResyncPeriod: relistDuration,
 			Indexers:     desireIndexers(),
 		},
 	)

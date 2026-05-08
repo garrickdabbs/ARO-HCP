@@ -149,15 +149,15 @@ func (o *Options) runControllersUnderLeaderElection(
 	// parent for every desire they touch.
 	kubeApplierCRUD := o.KubeApplierClient.KubeApplier(o.ManagementCluster)
 
-	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, o.DynamicClient, kubeApplierCRUD)
+	applyCtl, err := apply_desire.NewApplyDesireController(applyInformer, o.DynamicClient, kubeApplierCRUD, apply_desire.Config{})
 	if err != nil {
 		return fmt.Errorf("apply controller: %w", err)
 	}
-	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, o.DynamicClient, kubeApplierCRUD)
+	deleteCtl, err := delete_desire.NewDeleteDesireController(deleteInformer, o.DynamicClient, kubeApplierCRUD, delete_desire.Config{})
 	if err != nil {
 		return fmt.Errorf("delete controller: %w", err)
 	}
-	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, o.DynamicClient, kubeApplierCRUD)
+	readMgr, err := read_desire_manager.NewReadDesireInformerManagingController(readInformer, o.DynamicClient, kubeApplierCRUD, read_desire_manager.Config{})
 	if err != nil {
 		return fmt.Errorf("read manager: %w", err)
 	}

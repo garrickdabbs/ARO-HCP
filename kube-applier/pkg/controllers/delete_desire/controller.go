@@ -37,8 +37,10 @@ import (
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+	utilsclock "k8s.io/utils/clock"
 
 	"github.com/Azure/ARO-HCP/internal/api/kubeapplier"
+	controllerutil "github.com/Azure/ARO-HCP/internal/controllerutils"
 	"github.com/Azure/ARO-HCP/internal/database"
 	"github.com/Azure/ARO-HCP/internal/utils"
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/conditions"
@@ -46,8 +48,51 @@ import (
 	"github.com/Azure/ARO-HCP/kube-applier/pkg/controllers/keys"
 )
 
+// DefaultCooldownPeriod is the minimum interval between two reconciles of a
+// DeleteDesire whose Cosmos etag has not changed. Real content changes (Add
+// events and Update events with a different etag) bypass this gate.
+//
+// 1 minute is shorter than apply_desire's 10-minute default because a
+// DeleteDesire in the WaitingForDeletion state needs to keep checking the
+// kube apiserver to see whether finalizers have completed; once they
+// complete, the user wants Successful=True to land within a reasonable
+// window. 60s matches the previous fixed informer resync period and keeps
+// kube-apiserver Get traffic bounded.
+const DefaultCooldownPeriod = 1 * time.Minute
+
+// Config tunes the DeleteDesireController's cooldown behavior. Zero-valued
+// fields take the Default* constants; tests pass shorter durations and a
+// fake clock.
+type Config struct {
+	// CooldownPeriod gates poll-driven re-reconciles for a desire whose
+	// Cosmos etag has not changed. See DefaultCooldownPeriod.
+	CooldownPeriod time.Duration
+	// Clock is the time source used by the cooldown gate. nil =
+	// utilsclock.RealClock{}.
+	Clock utilsclock.PassiveClock
+}
+
+func (c Config) withDefaults() Config {
+	if c.CooldownPeriod == 0 {
+		c.CooldownPeriod = DefaultCooldownPeriod
+	}
+	if c.Clock == nil {
+		c.Clock = utilsclock.RealClock{}
+	}
+	return c
+}
+
 // DeleteDesireController reconciles DeleteDesires by deleting their target items
 // and reporting WaitingForDeletion until the items actually disappear.
+//
+// Reconcile cadence (mirrors apply_desire and backend's GenericWatchingController):
+//
+//   - Add events queue immediately.
+//   - Update events whose Cosmos etag differs from the previous version queue
+//     immediately. Etag-unchanged updates (informer resyncs, or our own status
+//     writes feeding back) are routed through the cooldown gate so a stuck
+//     WaitingForDeletion does not hammer the kube apiserver.
+//   - On error the workqueue's rate limiter requeues the key with backoff.
 type DeleteDesireController struct {
 	name                 string
 	deleteDesireInformer cache.SharedIndexInformer
@@ -55,6 +100,9 @@ type DeleteDesireController struct {
 	dyn                  dynamic.Interface
 	writer               desirestatuswriter.StatusWriter[kubeapplier.DeleteDesire, keys.DeleteDesireKey]
 	queue                workqueue.TypedRateLimitingInterface[keys.DeleteDesireKey]
+
+	cfg      Config
+	cooldown controllerutil.CooldownChecker
 }
 
 // NewDeleteDesireController wires up the informer event handler and returns a
@@ -64,12 +112,19 @@ type DeleteDesireController struct {
 // crudByParent provides a parent-scoped ResourceCRUD per DeleteDesire so
 // status replaces can be issued under the desire's own cluster/nodepool
 // resource ID rather than a sentinel parent.
+//
+// cfg's zero values get the Default* constants. Production callers may pass
+// Config{} directly; tests substitute shorter durations and a fake clock.
 func NewDeleteDesireController(
 	deleteDesireInformer cache.SharedIndexInformer,
 	dyn dynamic.Interface,
 	crudByParent database.KubeApplierDeleteDesireCRUD,
+	cfg Config,
 ) (*DeleteDesireController, error) {
+	cfg = cfg.withDefaults()
 	fetcher := &deleteDesireFetcher{crudByParent: crudByParent}
+	cooldownChecker := controllerutil.NewTimeBasedCooldownChecker(cfg.CooldownPeriod)
+	cooldownChecker.SetClock(cfg.Clock)
 	c := &DeleteDesireController{
 		name:                 "DeleteDesireController",
 		deleteDesireInformer: deleteDesireInformer,
@@ -83,20 +138,24 @@ func NewDeleteDesireController(
 			workqueue.DefaultTypedControllerRateLimiter[keys.DeleteDesireKey](),
 			workqueue.TypedRateLimitingQueueConfig[keys.DeleteDesireKey]{Name: "DeleteDesireController"},
 		),
+		cfg:      cfg,
+		cooldown: cooldownChecker,
 	}
 
 	if _, err := deleteDesireInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc:    func(obj any) { c.enqueue(obj) },
-		UpdateFunc: func(_, obj any) { c.enqueue(obj) },
+		AddFunc:    func(obj any) { c.handleAdd(obj) },
+		UpdateFunc: func(oldObj, newObj any) { c.handleUpdate(oldObj, newObj) },
 	}); err != nil {
 		return nil, fmt.Errorf("register informer handler: %w", err)
 	}
 	return c, nil
 }
 
-// Run starts threadiness workers. The DeleteDesire informer's 60s resync
-// drives the periodic re-check that turns "WaitingForDeletion" into
-// "Successful=True" once finalizers complete.
+// Run starts threadiness workers. The informer's handler resync (configured
+// via the informer factory's ResyncPeriod) fires periodic Update events for
+// every cached desire, and handleUpdate routes those through the cooldown
+// gate. That is what turns a stuck WaitingForDeletion into Successful=True
+// once finalizers complete.
 func (c *DeleteDesireController) Run(ctx context.Context, threadiness int) {
 	defer utilruntime.HandleCrash()
 	defer c.queue.ShutDown()
@@ -113,11 +172,44 @@ func (c *DeleteDesireController) Run(ctx context.Context, threadiness int) {
 	<-ctx.Done()
 }
 
-func (c *DeleteDesireController) enqueue(obj any) {
+// handleAdd queues every observed Add unconditionally. A new DeleteDesire
+// has never been reconciled, so the cooldown gate has nothing to compare
+// against.
+func (c *DeleteDesireController) handleAdd(obj any) {
 	d, ok := obj.(*kubeapplier.DeleteDesire)
 	if !ok {
 		return
 	}
+	c.enqueue(d)
+}
+
+// handleUpdate queues immediately when the Cosmos etag differs (real
+// content change, including a status write the controller itself just
+// produced) and consults the cooldown gate when it doesn't. The latter
+// path is the periodic re-check that drives WaitingForDeletion to
+// Successful once finalizers complete.
+func (c *DeleteDesireController) handleUpdate(oldObj, newObj any) {
+	oldD, oldOK := oldObj.(*kubeapplier.DeleteDesire)
+	newD, newOK := newObj.(*kubeapplier.DeleteDesire)
+	if !oldOK || !newOK {
+		return
+	}
+	if oldD.GetEtag() != newD.GetEtag() {
+		c.enqueue(newD)
+		return
+	}
+	key, err := keys.DeleteDesireKeyFromResourceID(newD.GetResourceID())
+	if err != nil {
+		utilruntime.HandleError(err)
+		return
+	}
+	if !c.cooldown.CanSync(context.TODO(), key) {
+		return
+	}
+	c.queue.Add(key)
+}
+
+func (c *DeleteDesireController) enqueue(d *kubeapplier.DeleteDesire) {
 	key, err := keys.DeleteDesireKeyFromResourceID(d.GetResourceID())
 	if err != nil {
 		utilruntime.HandleError(err)
