@@ -94,12 +94,8 @@ func NewNodePoolVersionController(
 //
 // 2. Desired Version Validation and Storage:
 //   - Reads the customer's desired version from HCPNodePool.Properties.Version.ID
-//   - Validates it against upgrade constraints (see below)
-//   - The desired version must satisfy:
-//   - Not less than the highest active version (no downgrades)
-//   - Not greater than the lowest control plane version (node pools cannot exceed CP)
-//   - Not skip minor versions (only z-stream or +1 minor allowed)
-//   - Exist as a known version in Cincinnati
+//   - Validates it against version change constraints (see validateDesiredNodePoolVersion)
+//   - Both upgrades and downgrades are supported — HCP nodepools use Replace strategy
 //   - If valid, stores it in ServiceProviderNodePool.Spec.NodePoolVersion.DesiredVersion
 //
 // If the desired version is already among the active versions, validation is skipped
@@ -246,16 +242,16 @@ func prependActiveVersionIfChanged(currentVersions []api.HCPNodePoolActiveVersio
 	return newVersions
 }
 
-// validateDesiredNodePoolVersion checks that the desired node pool version is a valid upgrade.
+// validateDesiredNodePoolVersion checks that the desired node pool version is a valid change.
 // It validates:
-//   - The desired version is not less than the highest active node pool version (no downgrades)
 //   - The desired version is not greater than the lowest control plane version
-//   - No major version changes (unless FeatureExperimentalReleaseFeatures is registered)
-//   - No minor versions are skipped
+//   - The desired version is within 2 minor versions of control plane (N-2 skew, same major)
+//   - No cross-major changes without FeatureExperimentalReleaseFeatures
+//   - No minor version skipping on upgrades
 //   - The desired version exists in Cincinnati
 //
 // Cincinnati upgrade-edge validation is intentionally skipped — HCP nodepools use the Replace
-// strategy (destroy + recreate), so only version existence matters. See OCM-16815, ARO-26792.
+// strategy (destroy + recreate), so only version existence matters.
 //
 // Returns nil if the desired version is valid, or an error describing why it's invalid.
 func (c *nodePoolVersionSyncer) validateDesiredNodePoolVersion(

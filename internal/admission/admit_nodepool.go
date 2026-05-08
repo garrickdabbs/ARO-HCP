@@ -126,7 +126,7 @@ func AdmitNodePoolUpdate(newNodePool, oldNodePool *api.HCPOpenShiftClusterNodePo
 
 // validateNodePoolVersionUpgrade validates that a node pool version change is valid.
 // It checks:
-//   - Downgrades allowed (no cross-major downgrades)
+//   - Downgrades allowed (cross-major requires FeatureExperimentalReleaseFeatures)
 //   - No major version change without FeatureExperimentalReleaseFeatures
 //   - No skipping minor versions on upgrade: new minor <= old minor + 1
 //   - Cannot exceed cluster version: new version <= cluster version

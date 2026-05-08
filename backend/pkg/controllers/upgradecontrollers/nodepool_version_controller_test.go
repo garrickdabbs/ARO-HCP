@@ -462,7 +462,7 @@ func assertSyncResult(t *testing.T, err error, expectedError bool, expectedError
 	t.Helper()
 	if expectedError {
 		assert.Error(t, err)
-		assert.NotEmpty(t, err, expectedErrorContains)
+		assert.ErrorContains(t, err, expectedErrorContains)
 	} else {
 		assert.NoError(t, err)
 	}
