@@ -35,7 +35,7 @@ import (
 	"github.com/Azure/ARO-HCP/test/cmd/aro-hcp-tests/cleanup"
 	customlinktools "github.com/Azure/ARO-HCP/test/cmd/aro-hcp-tests/custom-link-tools"
 	gatherobservability "github.com/Azure/ARO-HCP/test/cmd/aro-hcp-tests/gather-observability"
-	identitypool "github.com/Azure/ARO-HCP/test/cmd/aro-hcp-tests/identity-pool"
+	slotmanager "github.com/Azure/ARO-HCP/test/cmd/aro-hcp-tests/slot-manager"
 	"github.com/Azure/ARO-HCP/test/cmd/aro-hcp-tests/visualize"
 	"github.com/Azure/ARO-HCP/test/util/framework"
 	"github.com/Azure/ARO-HCP/test/util/labels"
@@ -272,8 +272,8 @@ func setupCli() *cobra.Command {
 	root.AddCommand(cleanup.NewCommand())
 	root.AddCommand(api.Must(visualize.NewCommand()))
 	root.AddCommand(api.Must(customlinktools.NewCommand()))
-	root.AddCommand(api.Must(identitypool.NewCommand()))
 	root.AddCommand(api.Must(gatherobservability.NewCommand()))
+	root.AddCommand(api.Must(slotmanager.NewCommand()))
 	return root
 }
 

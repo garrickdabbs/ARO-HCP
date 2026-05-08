@@ -1,0 +1,51 @@
+version: 1
+
+environments:
+  dev:
+    deploy_envs:
+      - prow
+      - ci01
+    pools:
+      - subscription_name: "ARO HCP E2E Hosted Clusters (EA Subscription)"
+        subscription_id_hash: f5ead0cb5023266042158b287cc43d43e037bc009fb010d3c6efa596b9e18d47
+        region: westus3
+        resource_type: aro-hcp-dev-westus3-slot
+        slot_count: 15
+        identity_container_prefix: aro-hcp-msi-container-dev
+        identity_container_count: 20
+
+  int:
+    deploy_envs:
+      - int
+    pools:
+      - subscription_name: "ARO SRE Team - INT (EA Subscription 3)"
+        subscription_id_hash: 25aa33440faa44e53b4e36694bf34b27d67104550f3263bec102c52fafe46191
+        region: uksouth
+        resource_type: aro-hcp-int-uksouth-slot
+        slot_count: 1
+        identity_container_prefix: aro-hcp-msi-container-int
+        identity_container_count: 20
+
+  stg:
+    deploy_envs:
+      - stg
+    pools:
+      - subscription_name: stg
+        subscription_id_hash: ad57837d6720e019ffb0188492ef3bdab91df3762de2908eee18f4e155fdbb85
+        region: uksouth
+        resource_type: aro-hcp-stg-uksouth-slot
+        slot_count: 1
+        identity_container_prefix: aro-hcp-msi-container-stg
+        identity_container_count: 30
+
+  prod:
+    deploy_envs:
+      - prod
+    pools:
+      - subscription_name: prod
+        subscription_id_hash: c71846c9f499272a6baad8fa1ac394f0d2a88fca6d816d0be2dfccd929650588
+        region: uksouth
+        resource_type: aro-hcp-prod-uksouth-slot
+        slot_count: 10
+        identity_container_prefix: aro-hcp-msi-container-prod
+        identity_container_count: 15
